@@ -41,9 +41,12 @@ def joint_motion_subspace_with_derivatives(
         - g: Transformation matrix over the interval, shape "(4, 4)".
         - S: Joint motion subspace over the interval, shape "(6, num_dofs)".
         - Sd: Time derivative of S induced by qd, shape "(6, num_dofs)".
-        - dSdq_qd: Directional derivative dS/dq contracted with qd, shape "(6, num_dofs)".
-        - dSdq_qdd: Directional derivative dS/dq contracted with qdd, shape "(6, num_dofs)".
-        - dSddq_qd: Directional derivative dSd/dq contracted with qd, shape "(6, num_dofs)".
+        - dSdq_qd: Jacobian of ``S(q) @ qd`` with respect to ``q``, shape
+          ``(6, num_dofs)``.
+        - dSdq_qdd: Jacobian of ``S(q) @ qdd`` with respect to ``q``, shape
+          ``(6, num_dofs)``.
+        - dSddq_qd: Jacobian of ``Sd(q, qd) @ qd`` with respect to ``q``,
+          shape ``(6, num_dofs)``.
     """
 
     I_theta = jnp.diag(jnp.array([1, 1, 1, 0, 0, 0]))
@@ -353,11 +356,12 @@ def joint_dSdq_qd(H, B_xi, xi_ref, q, qd, eps) -> Array:
         xi_ref: Reference strain vector, shape (6,).
         q: Generalized coordinates, shape (num_dofs,).
         qd: Generalized velocities, shape (num_dofs,).
-        eps: Small positive tolerance for the small-angle branch.
+        eps: Small positive tolerance used to avoid singular divisions. The
+            small-angle formulas switch branches at a fixed ``1e-2`` threshold.
 
     Returns:
-        dSdq_qd: Directional derivative dS/dq contracted with qd,
-            shape (6, num_dofs).
+        dSdq_qd: Jacobian of ``S(q) @ qd`` with respect to ``q``, shape
+            ``(6, num_dofs)``.
     """
 
     # Quantities required by both branches
@@ -460,7 +464,7 @@ def joint_dSdq_qd(H, B_xi, xi_ref, q, qd, eps) -> Array:
         return result
 
     return lax.cond(
-        theta <= eps,
+        theta <= _THETA_SERIES_THRESHOLD,
         _series_branch,
         _general_branch,
         operand=theta,

@@ -4,7 +4,7 @@ __all__ = ["PCS"]
 from typing import Any, Self
 
 import equinox as eqx
-from jax import Array, jvp, lax, vmap
+from jax import Array, jvp, lax, tree_util, vmap
 from jax import numpy as jnp
 
 from soromox.actuation.core import Actuator, PassiveElement
@@ -4308,10 +4308,13 @@ class PCS(SoftRobot):
         The inertial, Coriolis, and gravity directions use the analytical
         inverse-dynamics Jacobian passes. Actuator and passive-element force
         directions remain under JAX autodiff so configuration-dependent
-        components retain their exact derivatives.
+        components retain their exact derivatives. Model-parameter directions
+        differentiate the force residual at fixed ``(q, qd, qdd)`` and use
+        ``dID/dqdd = M`` for the implicit acceleration solve; this avoids
+        differentiating through the forward-dynamics linear solve.
         """
         robot, t, y, actuation_args = primals
-        _, _, y_tangent, actuation_args_tangent = tangents
+        robot_tangent, _, y_tangent, actuation_args_tangent = tangents
 
         yd = robot._forward_dynamics(t, y, actuation_args)
         q, qd = jnp.split(y, 2)
@@ -4370,6 +4373,36 @@ class PCS(SoftRobot):
             (q_tangent, qd_tangent, u_tangent, tau_ext_tangent),
         )
 
+        robot_has_tangent = any(
+            tangent is not None
+            for tangent in tree_util.tree_leaves(
+                robot_tangent,
+                is_leaf=lambda value: value is None,
+            )
+        )
+        if robot_has_tangent:
+
+            def dynamics_residual(robot_value: "PCS") -> Array:
+                mass_matrix_value, coriolis_qd, gravity_force = (
+                    robot_value.dynamics_terms(q, qd)
+                )
+                inverse_dynamics = mass_matrix_value @ qdd + coriolis_qd + gravity_force
+                applied_force = (
+                    robot_value.actuation_force(q, u, qd=qd)
+                    + tau_ext
+                    - robot_value.elastic_force(q)
+                    - robot_value.damping_matrix(q) @ qd
+                )
+                return applied_force - inverse_dynamics
+
+            _, robot_parameter_rhs_tangent = eqx.filter_jvp(
+                dynamics_residual,
+                (robot,),
+                (robot_tangent,),
+            )
+        else:
+            robot_parameter_rhs_tangent = jnp.zeros_like(q)
+
         if y_tangent is None:
             mass_matrix = robot.inertia_matrix(q)
             inverse_dynamics_tangent = jnp.zeros_like(q)
@@ -4387,7 +4420,9 @@ class PCS(SoftRobot):
 
         qdd_tangent = robot._solve_inertia(
             mass_matrix,
-            applied_force_tangent - inverse_dynamics_tangent,
+            applied_force_tangent
+            + robot_parameter_rhs_tangent
+            - inverse_dynamics_tangent,
         )
         yd_tangent = jnp.concatenate([qd_tangent, qdd_tangent])
         return yd, yd_tangent
