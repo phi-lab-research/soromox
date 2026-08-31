@@ -4410,24 +4410,9 @@ class PCS(SoftRobot):
             robot_parameter_rhs_tangent = jnp.zeros_like(q)
 
         if y_tangent is None:
-            mass_matrix = robot.inertia_matrix(q)
             inverse_dynamics_tangent = jnp.zeros_like(q)
         else:
-            (
-                dID_dq,
-                dID_dqd,
-                _,
-                _,
-                _,
-                _,
-                _,
-            ) = robot.inverse_dynamics_backward_pass(
-                q,
-                qd,
-                qdd,
-                materialize_wrench_history=False,
-                compute_acceleration_jacobian=False,
-            )
+            dID_dq, dID_dqd = robot.inverse_dynamics_backward_pass(q, qd, qdd)
             inverse_dynamics_tangent = dID_dq @ q_tangent + dID_dqd @ qd_tangent
 
         qdd_tangent = robot._solve_inertia(
@@ -4708,10 +4693,7 @@ class PCS(SoftRobot):
         q: Array,
         qd: Array,
         qdd: Array,
-        *,
-        materialize_wrench_history: bool = True,
-        compute_acceleration_jacobian: bool = True,
-    ) -> tuple[Array, Array, Array, Array, Array, Array, Array]:
+    ) -> tuple[Array, Array]:
         """
         Recurse the composite wrench and its Jacobians from tip to base.
 
@@ -4728,24 +4710,13 @@ class PCS(SoftRobot):
                 ``(self.num_dofs,)``.
             qdd (Array): Active generalized accelerations. Shape is
                 ``(self.num_dofs,)``.
-            materialize_wrench_history: Whether to return the per-interval
-                resultant-wrench derivative histories. State-Jacobian callers
-                can disable this because they only consume the three aggregate
-                inverse-dynamics Jacobians. Defaults to true.
-            compute_acceleration_jacobian: Whether to propagate
-                ``dID/dqdd``. Callers that already assembled the inertia matrix
-                can disable this duplicate recursion. Defaults to true.
 
         Returns:
-            tuple[Array, Array, Array, Array, Array, Array, Array]: Tuple
-            ``(dID_dq, dID_dqd, dID_dqdd, F_res, dF_res_dq,
-            dF_res_dqd, dF_res_dqdd)``. The first three inverse-dynamics
-            derivatives have shape ``(self.num_dofs, self.num_dofs)``;
-            ``dID_dqdd`` is also the generalized inertia matrix. ``F_res``
-            has shape ``(self.num_segments,
-            self.num_integration_points - 1, 6)``. Its three derivatives
-            have shape ``(self.num_segments,
-            self.num_integration_points - 1, 6, self.num_dofs)``.
+            tuple[Array, Array]: The inverse-dynamics derivatives
+            ``(dID_dq, dID_dqd)``. Each derivative has shape
+            ``(self.num_dofs, self.num_dofs)``. The acceleration derivative
+            ``dID/dqdd`` is the generalized inertia matrix and should be
+            obtained from the forward-dynamics primal or ``inertia_matrix``.
         """
         (
             segment_indices,
@@ -4766,16 +4737,6 @@ class PCS(SoftRobot):
         zeros_6 = jnp.zeros((6,), dtype=q.dtype)
         zeros_6n = jnp.zeros((6, self.num_dofs), dtype=q.dtype)
         zeros_nn = jnp.zeros((self.num_dofs, self.num_dofs), dtype=q.dtype)
-        acceleration_zeros_6n = (
-            zeros_6n
-            if compute_acceleration_jacobian
-            else jnp.empty((0, 0), dtype=q.dtype)
-        )
-        acceleration_zeros_nn = (
-            zeros_nn
-            if compute_acceleration_jacobian
-            else jnp.empty((0, 0), dtype=q.dtype)
-        )
         B_xi_segments = self.B_xi.reshape(
             self.num_segments,
             6,
@@ -4786,27 +4747,23 @@ class PCS(SoftRobot):
             zeros_6,
             zeros_6n,
             zeros_6n,
-            acceleration_zeros_6n,
             zeros_nn,
             zeros_nn,
-            acceleration_zeros_nn,
         )
 
         def propagate_interval_backward(
-            carry: tuple[Array, Array, Array, Array, Array, Array, Array],
+            carry: tuple[Array, Array, Array, Array, Array],
             step_idx: Array,
         ) -> tuple[
-            tuple[Array, Array, Array, Array, Array, Array, Array],
-            tuple[Array, Array, Array, Array],
+            tuple[Array, Array, Array, Array, Array],
+            None,
         ]:
             (
                 F_res_child,
                 dF_res_dq_child,
                 dF_res_dqd_child,
-                dF_res_dqdd_child,
                 dID_dq,
                 dID_dqd,
-                dID_dqdd,
             ) = carry
 
             segment_idx = segment_indices[step_idx]
@@ -4865,17 +4822,11 @@ class PCS(SoftRobot):
             dF_res_dqd_tip = (
                 dF_res_dqd_child + mass_action(Y_i) + velocity_convective_jacobian
             )
-            if compute_acceleration_jacobian:
-                dF_res_dqdd_tip = dF_res_dqdd_child + mass_action(J_i)
 
             coAdg = Adginv_i.T
             F_res = coAdg @ F_res_tip
             dF_res_dq = coAdg @ dF_res_dq_tip
             dF_res_dqd = coAdg @ dF_res_dqd_tip
-            if compute_acceleration_jacobian:
-                dF_res_dqdd = coAdg @ dF_res_dqdd_tip
-            else:
-                dF_res_dqdd = dF_res_dqdd_child
 
             dF_res_dq = dF_res_dq + vmap(
                 se3.coadjoint_action,
@@ -4898,29 +4849,15 @@ class PCS(SoftRobot):
 
             dID_dq = dID_dq + S_i.T @ dF_res_dq + dSTF_res_dq
             dID_dqd = dID_dqd + S_i.T @ dF_res_dqd
-            if compute_acceleration_jacobian:
-                dID_dqdd = dID_dqdd + S_i.T @ dF_res_dqdd
 
             carry_next = (
                 F_res,
                 dF_res_dq,
                 dF_res_dqd,
-                dF_res_dqdd,
                 dID_dq,
                 dID_dqd,
-                dID_dqdd,
             )
-            output = (
-                (
-                    F_res,
-                    dF_res_dq,
-                    dF_res_dqd,
-                    dF_res_dqdd,
-                )
-                if materialize_wrench_history
-                else None
-            )
-            return carry_next, output
+            return carry_next, None
 
         num_intervals = segment_indices.shape[0]
         reverse_indices = jnp.arange(
@@ -4934,46 +4871,17 @@ class PCS(SoftRobot):
                 _,
                 _,
                 _,
-                _,
                 dID_dq,
                 dID_dqd,
-                dID_dqdd,
             ),
-            reverse_outputs,
+            _,
         ) = lax.scan(
             propagate_interval_backward,
             carry_init,
             reverse_indices,
         )
 
-        if materialize_wrench_history:
-            (
-                F_res,
-                dF_res_dq,
-                dF_res_dqd,
-                dF_res_dqdd,
-            ) = (jnp.flip(value, axis=0) for value in reverse_outputs)
-            step_shape = (self.num_segments, self.num_integration_points - 1)
-            F_res = F_res.reshape(*step_shape, 6)
-            dF_res_dq = dF_res_dq.reshape(*step_shape, 6, self.num_dofs)
-            dF_res_dqd = dF_res_dqd.reshape(*step_shape, 6, self.num_dofs)
-            dF_res_dqdd = dF_res_dqdd.reshape(*step_shape, 6, self.num_dofs)
-        else:
-            F_res = jnp.empty((0, 6), dtype=q.dtype)
-            empty_derivative = jnp.empty((0, 6, self.num_dofs), dtype=q.dtype)
-            dF_res_dq = empty_derivative
-            dF_res_dqd = empty_derivative
-            dF_res_dqdd = empty_derivative
-
-        return (
-            dID_dq,
-            dID_dqd,
-            dID_dqdd,
-            F_res,
-            dF_res_dq,
-            dF_res_dqd,
-            dF_res_dqdd,
-        )
+        return dID_dq, dID_dqd
 
     @eqx.filter_jit
     def inverse_dynamics_derivatives(
@@ -4997,11 +4905,10 @@ class PCS(SoftRobot):
             tuple[Array, Array]: The derivatives ``(dID_dq, dID_dqd)``. Both
             arrays have shape ``(self.num_dofs, self.num_dofs)``.
         """
-        dID_dq, dID_dqd, _, _, _, _, _ = self.inverse_dynamics_backward_pass(
+        dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(
             q,
             qd,
             qdd,
-            materialize_wrench_history=False,
         )
         return dID_dq, dID_dqd
 
@@ -5122,20 +5029,25 @@ class PCS(SoftRobot):
         if u is None:
             u = jnp.zeros((self.num_actuators,), dtype=q.dtype)
 
-        (
-            dID_dq,
-            dID_dqd,
-            mass_matrix,
-            _,
-            _,
-            _,
-            _,
-        ) = self.inverse_dynamics_backward_pass(
+        mass_matrix = self.inertia_matrix(q)
+        return self._forward_dynamics_derivatives_with_inertia(
             q,
             qd,
             qdd,
-            materialize_wrench_history=False,
+            u,
+            mass_matrix,
         )
+
+    def _forward_dynamics_derivatives_with_inertia(
+        self,
+        q: Array,
+        qd: Array,
+        qdd: Array,
+        u: Array,
+        mass_matrix: Array,
+    ) -> tuple[Array, Array]:
+        """Return state derivatives while reusing an assembled inertia matrix."""
+        dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(q, qd, qdd)
 
         d_elastic_dq = self.elastic_force_derivative_q(q)
         d_damping_dq, d_damping_dqd = self.damping_force_derivatives(q, qd)
@@ -5170,6 +5082,14 @@ class PCS(SoftRobot):
             ``(self.num_dofs, self.num_dofs)``, respectively.
         """
         mass_matrix = self.inertia_matrix(q)
+        return self._forward_dynamics_input_derivatives_with_inertia(q, mass_matrix)
+
+    def _forward_dynamics_input_derivatives_with_inertia(
+        self,
+        q: Array,
+        mass_matrix: Array,
+    ) -> tuple[Array, Array]:
+        """Return input derivatives while reusing an assembled inertia matrix."""
         dqdd_du = self._solve_inertia(
             mass_matrix,
             self.actuation_force_derivative_u(q),
@@ -5222,9 +5142,19 @@ class PCS(SoftRobot):
         if tau_ext is None:
             tau_ext = jnp.zeros((q.shape[0],), dtype=q.dtype)
 
-        yd = self.forward_dynamics(t, y, (u, tau_ext))
+        yd, mass_matrix = self._forward_dynamics_with_inertia(
+            t,
+            y,
+            (u, tau_ext),
+        )
         _, qdd = jnp.split(yd, 2)
-        dqdd_dq, dqdd_dqd = self.forward_dynamics_derivatives(q, qd, qdd, u)
+        dqdd_dq, dqdd_dqd = self._forward_dynamics_derivatives_with_inertia(
+            q,
+            qd,
+            qdd,
+            u,
+            mass_matrix,
+        )
 
         eye = jnp.eye(q.shape[0], dtype=q.dtype)
         zeros = jnp.zeros_like(eye)
@@ -5261,18 +5191,40 @@ class PCS(SoftRobot):
         q, qd = jnp.split(y, 2)
 
         if actuation_args is None:
-            u = None
-        elif len(actuation_args) == 1 or len(actuation_args) == 2:
+            u, tau_ext = None, None
+        elif len(actuation_args) == 1:
             u = actuation_args[0]
+            tau_ext = None
+        elif len(actuation_args) == 2:
+            u, tau_ext = actuation_args
         else:
             raise ValueError("actuation_args must be a tuple of length 1 or 2.")
 
         if u is None:
             u = jnp.zeros((self.num_actuators,), dtype=q.dtype)
+        if tau_ext is None:
+            tau_ext = jnp.zeros((q.shape[0],), dtype=q.dtype)
 
-        dyd_dy = self.forward_dynamics_state_jacobian(t, y, actuation_args)
-        dqdd_du, dqdd_dtau_ext = self.forward_dynamics_input_derivatives(q)
+        yd, mass_matrix = self._forward_dynamics_with_inertia(
+            t,
+            y,
+            (u, tau_ext),
+        )
+        _, qdd = jnp.split(yd, 2)
+        dqdd_dq, dqdd_dqd = self._forward_dynamics_derivatives_with_inertia(
+            q,
+            qd,
+            qdd,
+            u,
+            mass_matrix,
+        )
+        dqdd_du, dqdd_dtau_ext = self._forward_dynamics_input_derivatives_with_inertia(
+            q, mass_matrix
+        )
 
+        eye = jnp.eye(q.shape[0], dtype=q.dtype)
+        zeros = jnp.zeros_like(eye)
+        dyd_dy = jnp.block([[zeros, eye], [dqdd_dq, dqdd_dqd]])
         zeros_du = jnp.zeros((q.shape[0], u.shape[0]), dtype=q.dtype)
         zeros_tau = jnp.zeros((q.shape[0], q.shape[0]), dtype=q.dtype)
         dyd_du = jnp.concatenate([zeros_du, dqdd_du], axis=0)

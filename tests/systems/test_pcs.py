@@ -1443,16 +1443,15 @@ def test_inverse_dynamics_jacobian_passes_match_autodiff(
         inertia, coriolis_qd, gravity = model.dynamics_terms(q_, qd_)
         return inertia @ qdd_ + coriolis_qd + gravity
 
-    dID_dq, dID_dqd, dID_dqdd, _, _, _, _ = model.inverse_dynamics_backward_pass(
-        q, qd, qdd
-    )
+    dID_dq, dID_dqd = model.inverse_dynamics_backward_pass(q, qd, qdd)
+    mass_matrix = model.inertia_matrix(q)
     expected_dID_dq = jacfwd(lambda q_: inverse_dynamics_force(q_, qd, qdd))(q)
     expected_dID_dqd = jacfwd(lambda qd_: inverse_dynamics_force(q, qd_, qdd))(qd)
     expected_dID_dqdd = jacfwd(lambda qdd_: inverse_dynamics_force(q, qd, qdd_))(qdd)
 
     assert_allclose(dID_dq, expected_dID_dq, rtol=RTOL, atol=ATOL)
     assert_allclose(dID_dqd, expected_dID_dqd, rtol=RTOL, atol=ATOL)
-    assert_allclose(dID_dqdd, expected_dID_dqdd, rtol=RTOL, atol=ATOL)
+    assert_allclose(mass_matrix, expected_dID_dqdd, rtol=RTOL, atol=ATOL)
 
     zero_q = jnp.zeros_like(q)
     zero_results = model.inverse_dynamics_backward_pass(zero_q, qd, qdd)
