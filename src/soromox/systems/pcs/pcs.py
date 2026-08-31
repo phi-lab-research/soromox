@@ -3473,7 +3473,30 @@ class PCS(SoftRobot):
         start_segment_index: Array,
         end_segment_index: Array,
     ) -> Array:
-        """Return the analytical state pushforward of one routing basis."""
+        """
+        Compute the directional derivative of one routed-path basis density.
+
+        Args:
+            segment_index (Array): Index of the PCS segment containing the
+                integration point. Shape is ``()``.
+            strain (Array): Spatial strain of the segment. Shape is ``(6,)``.
+            strain_tangent (Array): Directional derivative of ``strain``.
+                Shape is ``(6,)``.
+            s (Array): Backbone coordinate of the integration point. Shape is
+                ``()``.
+            routing (ThreadlikeRouting): Runtime routing functions for the
+                threadlike paths.
+            path_params (BaseThreadlikeRoutingParams): Parameters of one
+                routed path.
+            start_segment_index (Array): First segment traversed by the path.
+                Shape is ``()``.
+            end_segment_index (Array): Last segment traversed by the path.
+                Shape is ``()``.
+
+        Returns:
+            basis_tangent (Array): Directional derivative of the spatial
+            routed-path length-gradient density. Shape is ``(6,)``.
+        """
         active = (start_segment_index <= segment_index) & (
             segment_index <= end_segment_index
         )
@@ -3500,7 +3523,21 @@ class PCS(SoftRobot):
         q_tangent: Array,
         routing: ThreadlikeRouting,
     ) -> Array:
-        """Differentiate raw routed-length moment arms in one state direction."""
+        """
+        Compute the routed-length moment-matrix directional derivative.
+
+        Args:
+            q (Array): Generalized coordinates. Shape is ``(self.num_dofs,)``.
+            q_tangent (Array): Directional derivative of ``q``. Shape is
+                ``(self.num_dofs,)``.
+            routing (ThreadlikeRouting): Runtime routing functions for the
+                threadlike paths.
+
+        Returns:
+            moment_matrix_tangent (Array): Directional derivative of the raw
+            routed-length moment matrix. Shape is
+            ``(self.num_dofs, routing.num_paths)``.
+        """
         params = routing.params
         count = params.num_paths
         if count == 0:
@@ -3551,7 +3588,24 @@ class PCS(SoftRobot):
         u: Array,
         q_tangent: Array,
     ) -> Array:
-        """Return the analytical PCS actuation-force state pushforward."""
+        """
+        Compute the actuation-force directional derivative with respect to state.
+
+        Args:
+            q (Array): Generalized coordinates. Shape is ``(self.num_dofs,)``.
+            u (Array): Ordered actuator controls. Shape is
+                ``(self.num_actuators,)``.
+            q_tangent (Array): Directional derivative of ``q``. Shape is
+                ``(self.num_dofs,)``.
+
+        Returns:
+            force_tangent (Array): Directional derivative of the generalized
+            actuation force. Shape is ``(self.num_dofs,)``.
+
+        Raises:
+            NotImplementedError: If an installed actuator has no analytical
+                PCS state-pushforward implementation.
+        """
         force_tangent = jnp.zeros((self.num_dofs,), dtype=q.dtype)
         start = 0
         for actuator in self.actuators:
@@ -3585,7 +3639,28 @@ class PCS(SoftRobot):
         q_tangent: Array,
         qd_tangent: Array,
     ) -> Array:
-        """Return the analytical passive applied-force state pushforward."""
+        """
+        Compute the passive applied-force state directional derivative.
+
+        The differentiated applied force is the negative sum of the passive
+        elastic force and the passive damping force.
+
+        Args:
+            q (Array): Generalized coordinates. Shape is ``(self.num_dofs,)``.
+            qd (Array): Generalized velocities. Shape is ``(self.num_dofs,)``.
+            q_tangent (Array): Directional derivative of ``q``. Shape is
+                ``(self.num_dofs,)``.
+            qd_tangent (Array): Directional derivative of ``qd``. Shape is
+                ``(self.num_dofs,)``.
+
+        Returns:
+            force_tangent (Array): Directional derivative of the generalized
+            passive applied force. Shape is ``(self.num_dofs,)``.
+
+        Raises:
+            NotImplementedError: If an installed passive element has no
+                analytical PCS state-pushforward implementation.
+        """
         force_tangent = jnp.zeros((self.num_dofs,), dtype=q.dtype)
         for element in self.passive_elements:
             if not isinstance(element, ThreadlikeImpedance):
