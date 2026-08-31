@@ -51,8 +51,14 @@ def test_benchmark_defaults_cover_standard_quadrature_and_larger_models() -> Non
 
     assert args.gauss_points == 5
     assert args.segment_counts == [1, 2, 4, 8, 16, 32]
+    assert args.workloads == [
+        "state_jvp",
+        "state_jacobian_matvec",
+        "state_jacobian",
+    ]
     assert args.rollout_steps == 8
     assert args.rollout_dt == 1.0e-4
+    assert args.calls_per_sample == 1
 
 
 def test_benchmark_custom_jvp_matches_direct_jax_autodiff() -> None:
@@ -92,6 +98,32 @@ def test_custom_jvp_input_only_tangent_matches_direct_jax_autodiff() -> None:
     )(u)
 
     assert_allclose(candidate, reference, rtol=1.0e-5, atol=1.0e-8)
+
+
+def test_directional_jvp_matches_full_analytical_jacobian_matvec() -> None:
+    model = benchmark.build_model("threadlike", num_segments=2, gauss_points=5)
+    _, directional_fn, inputs = _build_workload(
+        model,
+        "state_jvp",
+        use_custom_jvp=True,
+    )
+    _, full_jacobian_fn, _ = _build_workload(
+        model,
+        "state_jacobian_matvec",
+        use_custom_jvp=True,
+    )
+    _, autodiff_full_jacobian_fn, _ = _build_workload(
+        model,
+        "state_jacobian_matvec",
+        use_custom_jvp=False,
+    )
+
+    directional = directional_fn(*inputs)
+    full_jacobian = full_jacobian_fn(*inputs)
+    autodiff_full_jacobian = autodiff_full_jacobian_fn(*inputs)
+
+    _assert_trees_allclose(directional, full_jacobian)
+    _assert_trees_allclose(directional, autodiff_full_jacobian)
 
 
 @pytest.mark.parametrize(
@@ -157,7 +189,11 @@ def test_rollout_derivative_workloads_match_direct_jax_autodiff(workload: str) -
 
 @pytest.mark.parametrize(
     ("option", "value"),
-    [("--rollout-steps", "0"), ("--rollout-dt", "0")],
+    [
+        ("--rollout-steps", "0"),
+        ("--rollout-dt", "0"),
+        ("--calls-per-sample", "0"),
+    ],
 )
 def test_invalid_rollout_options_are_rejected(option: str, value: str) -> None:
     with pytest.raises(SystemExit):

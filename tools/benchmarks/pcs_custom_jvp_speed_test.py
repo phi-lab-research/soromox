@@ -5,6 +5,13 @@ The benchmark separates the first-call compilation cost from steady-state
 execution time. Every timed call is synchronized with the active JAX device.
 Custom-JVP and pure-autodiff outputs are also compared for correctness.
 
+For ``state_jvp``, the disabled path is JAX's direct JVP and the enabled path
+is the analytical directional recurrence. For ``state_jacobian_matvec``, both
+paths first materialize a full state Jacobian and then multiply it by the same
+direction: JAX ``jacfwd`` when disabled and the analytical PCS Jacobian when
+enabled. Each workload returns the primal and tangent so their timed work and
+correctness checks are directly comparable.
+
 Rollout workloads apply a constant actuation over a short fixed-step trajectory
 and return the final generalized position ``q(T)``. They benchmark either one
 directional JVP or the full Jacobian with respect to the actuation ``u``, the
@@ -15,7 +22,7 @@ Example:
     python tools/benchmarks/pcs_custom_jvp_speed_test.py \
         --segment-counts 1 2 4 8 16 32 \
         --setups full bending_extension axial threadlike \
-        --workloads state_jvp state_jacobian \
+        --workloads state_jvp state_jacobian_matvec state_jacobian \
             rollout_actuation_jvp rollout_actuation_jacobian \
             rollout_initial_position_jvp rollout_initial_position_jacobian \
             rollout_parameters_jvp rollout_parameters_jacobian \
@@ -61,6 +68,7 @@ SETUPS = ("full", "bending_extension", "axial", "threadlike")
 WORKLOADS = (
     "primal",
     "state_jvp",
+    "state_jacobian_matvec",
     "state_jacobian",
     "all_jacobians",
     "rollout_actuation_jvp",
@@ -265,6 +273,22 @@ def build_workload(
             (y,),
             (y_direction,),
         )
+    if workload == "state_jacobian_matvec":
+        if use_custom_jvp:
+            return lambda y, u, tau_ext, parameters: (
+                dynamics(y, u, tau_ext, parameters),
+                model.forward_dynamics_state_jacobian(
+                    t,
+                    y,
+                    (u, tau_ext),
+                )
+                @ y_direction,
+            )
+        return lambda y, u, tau_ext, parameters: (
+            dynamics(y, u, tau_ext, parameters),
+            jax.jacfwd(lambda y_value: dynamics(y_value, u, tau_ext, parameters))(y)
+            @ y_direction,
+        )
     if workload == "state_jacobian":
         return lambda y, u, tau_ext, parameters: jax.jacfwd(
             lambda y_value: dynamics(y_value, u, tau_ext, parameters)
@@ -339,6 +363,7 @@ def measure(
     args: tuple[Array, Array, Array, Array],
     warmup_runs: int,
     repeats: int,
+    calls_per_sample: int,
 ) -> tuple[float, float, Tree]:
     """Return estimated compilation seconds, median execution seconds, output."""
     compiled = jax.jit(fn)
@@ -354,9 +379,10 @@ def measure(
     samples = []
     for _ in range(repeats):
         start = time.perf_counter()
-        output = compiled(*args)
+        for _ in range(calls_per_sample):
+            output = compiled(*args)
         block_until_ready(output)
-        samples.append(time.perf_counter() - start)
+        samples.append((time.perf_counter() - start) / calls_per_sample)
 
     execution = statistics.median(samples)
     compilation = max(0.0, first_call - execution)
@@ -392,7 +418,8 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
     device = jax.devices()[0]
     print(
         f"device={device.platform}:{getattr(device, 'device_kind', 'unknown')} "
-        f"x64={jax.config.x64_enabled} repeats={args.repeats}"
+        f"x64={jax.config.x64_enabled} repeats={args.repeats} "
+        f"calls_per_sample={args.calls_per_sample}"
     )
     print(
         "setup                 links dof workload                            "
@@ -430,6 +457,7 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                         inputs,
                         args.warmup_runs,
                         args.repeats,
+                        args.calls_per_sample,
                     )
 
                 compile_off, execution_off, output_off = measurements[False]
@@ -451,6 +479,7 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "workload": workload,
                     "rollout_steps": args.rollout_steps,
                     "rollout_dt": args.rollout_dt,
+                    "calls_per_sample": args.calls_per_sample,
                     "custom_jvp_disabled_compile_s": compile_off,
                     "custom_jvp_enabled_compile_s": compile_on,
                     "custom_jvp_disabled_execution_s": execution_off,
@@ -487,13 +516,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--workloads",
         nargs="+",
         choices=WORKLOADS,
-        default=["state_jvp", "state_jacobian"],
+        default=["state_jvp", "state_jacobian_matvec", "state_jacobian"],
     )
     parser.add_argument("--gauss-points", type=int, default=5)
     parser.add_argument("--rollout-steps", type=int, default=8)
     parser.add_argument("--rollout-dt", type=float, default=1.0e-4)
     parser.add_argument("--warmup-runs", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--calls-per-sample", type=int, default=1)
     parser.add_argument("--correctness-rtol", type=float, default=1.0e-5)
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args(argv)
@@ -507,6 +537,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--rollout-dt must be positive")
     if args.warmup_runs < 0 or args.repeats < 1:
         parser.error("warmup runs must be non-negative and repeats must be positive")
+    if args.calls_per_sample < 1:
+        parser.error("--calls-per-sample must be positive")
     if args.correctness_rtol <= 0.0:
         parser.error("--correctness-rtol must be positive")
     return args

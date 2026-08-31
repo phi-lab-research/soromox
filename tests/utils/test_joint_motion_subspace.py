@@ -8,6 +8,7 @@ from numpy.testing import assert_allclose
 from soromox.utils.joint_motion_subspace import (
     joint_dSdq_qd,
     joint_dSTF_dq,
+    joint_dSTF_dq_direction,
     joint_motion_subspace_with_derivatives,
 )
 from soromox.utils.lie_algebra import se3
@@ -48,6 +49,7 @@ def test_joint_motion_subspace_derivatives_match_autodiff(rotation: float) -> No
     expected_dS_qdd_dq = jax.jacfwd(lambda value: motion_subspace(value) @ qdd)(q)
     expected_dSd_qd_dq = jax.jacfwd(lambda value: motion_subspace_dot(value) @ qd)(q)
     expected_dSTF_dq = jax.jacfwd(lambda value: motion_subspace(value).T @ wrench)(q)
+    q_directions = jnp.stack((qd, qdd), axis=1)
 
     (
         transform,
@@ -95,6 +97,49 @@ def test_joint_motion_subspace_derivatives_match_autodiff(rotation: float) -> No
             eps,
         ),
         expected_dSTF_dq,
+        rtol=1.0e-8,
+        atol=1.0e-10,
+    )
+    assert_allclose(
+        joint_dSTF_dq_direction(
+            interval_length,
+            strain_basis,
+            reference_strain,
+            q,
+            wrench,
+            q_directions,
+            eps,
+        ),
+        expected_dSTF_dq @ q_directions,
+        rtol=1.0e-8,
+        atol=1.0e-10,
+    )
+
+    directional_results = joint_motion_subspace_with_derivatives(
+        interval_length,
+        strain_basis,
+        reference_strain,
+        q,
+        qd,
+        qdd,
+        eps,
+        q_directions,
+    )
+    assert_allclose(
+        directional_results[3],
+        expected_deta_dq @ q_directions,
+        rtol=1.0e-8,
+        atol=1.0e-10,
+    )
+    assert_allclose(
+        directional_results[4],
+        expected_dS_qdd_dq @ q_directions,
+        rtol=1.0e-8,
+        atol=1.0e-10,
+    )
+    assert_allclose(
+        directional_results[5],
+        expected_dSd_qd_dq @ q_directions,
         rtol=1.0e-8,
         atol=1.0e-10,
     )

@@ -1453,6 +1453,22 @@ def test_inverse_dynamics_jacobian_passes_match_autodiff(
     assert_allclose(dID_dqd, expected_dID_dqd, rtol=RTOL, atol=ATOL)
     assert_allclose(mass_matrix, expected_dID_dqdd, rtol=RTOL, atol=ATOL)
 
+    q_directions = jnp.stack((qd, tau_ext), axis=1)
+    qd_directions = jnp.stack((qdd, q), axis=1)
+    directional_dID = model.inverse_dynamics_state_pushforward(
+        q,
+        qd,
+        qdd,
+        q_directions,
+        qd_directions,
+    )
+    assert_allclose(
+        directional_dID,
+        expected_dID_dq @ q_directions + expected_dID_dqd @ qd_directions,
+        rtol=RTOL,
+        atol=ATOL,
+    )
+
     zero_q = jnp.zeros_like(q)
     zero_results = model.inverse_dynamics_backward_pass(zero_q, qd, qdd)
     zero_expected_dID_dq = jacfwd(lambda q_: inverse_dynamics_force(q_, qd, qdd))(
