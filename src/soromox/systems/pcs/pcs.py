@@ -4,7 +4,7 @@ __all__ = ["PCS"]
 from typing import Any, Self
 
 import equinox as eqx
-from jax import Array, jvp, lax, tree_util, vmap
+from jax import Array, lax, tree_util, vmap
 from jax import numpy as jnp
 
 from soromox.actuation.core import Actuator, PassiveElement
@@ -61,7 +61,7 @@ from soromox.utils.integration import (
     scale_interior_gaussian_quadrature,
 )
 from soromox.utils.joint_motion_subspace import (
-    joint_dSdq_qd,
+    joint_dSTF_dq,
     joint_motion_subspace_with_derivatives,
 )
 from soromox.utils.lie_algebra import se3, so3
@@ -4254,6 +4254,13 @@ class PCS(SoftRobot):
         self, t: Array, y: Array, actuation_args: tuple | None = None
     ) -> Array:
         """Evaluate the PCS forward-dynamics primal without a custom JVP."""
+        yd, _ = self._forward_dynamics_with_inertia(t, y, actuation_args)
+        return yd
+
+    def _forward_dynamics_with_inertia(
+        self, t: Array, y: Array, actuation_args: tuple | None = None
+    ) -> tuple[Array, Array]:
+        """Evaluate forward dynamics and return its assembled inertia matrix."""
         del t
 
         # Split the state vector into configuration and velocity
@@ -4284,7 +4291,7 @@ class PCS(SoftRobot):
 
         yd = jnp.concatenate([qd, qdd])
 
-        return yd
+        return yd, B
 
     @eqx.filter_custom_jvp
     @staticmethod
@@ -4316,7 +4323,7 @@ class PCS(SoftRobot):
         robot, t, y, actuation_args = primals
         robot_tangent, _, y_tangent, actuation_args_tangent = tangents
 
-        yd = robot._forward_dynamics(t, y, actuation_args)
+        yd, mass_matrix = robot._forward_dynamics_with_inertia(t, y, actuation_args)
         q, qd = jnp.split(y, 2)
         _, qdd = jnp.split(yd, 2)
 
@@ -4331,6 +4338,8 @@ class PCS(SoftRobot):
             tau_ext = jnp.zeros_like(q)
             u_tangent = jnp.zeros_like(u)
             tau_ext_tangent = jnp.zeros_like(tau_ext)
+            u_has_tangent = False
+            tau_ext_has_tangent = False
         else:
             u = actuation_args[0]
             tau_ext = actuation_args[1] if len(actuation_args) == 2 else None
@@ -4349,29 +4358,26 @@ class PCS(SoftRobot):
                 u = jnp.zeros((robot.num_actuators,), dtype=q.dtype)
             if tau_ext is None:
                 tau_ext = jnp.zeros_like(q)
+            u_has_tangent = u_tangent is not None
+            tau_ext_has_tangent = tau_ext_tangent is not None
             if u_tangent is None:
                 u_tangent = jnp.zeros_like(u)
             if tau_ext_tangent is None:
                 tau_ext_tangent = jnp.zeros_like(tau_ext)
 
-        def applied_force(
-            q_value: Array,
-            qd_value: Array,
-            u_value: Array,
-            tau_ext_value: Array,
-        ) -> Array:
-            return (
-                robot.actuation_force(q_value, u_value, qd=qd_value)
-                + tau_ext_value
-                - robot.elastic_force(q_value)
-                - robot.damping_matrix(q_value) @ qd_value
+        d_damping_dq, d_damping_dqd = robot.damping_force_derivatives(q, qd)
+        applied_force_tangent = (
+            robot.actuation_force_derivative_q(q, u)
+            - robot.elastic_force_derivative_q(q)
+            - d_damping_dq
+        ) @ q_tangent - d_damping_dqd @ qd_tangent
+        if u_has_tangent:
+            applied_force_tangent = (
+                applied_force_tangent
+                + robot.actuation_force_derivative_u(q) @ u_tangent
             )
-
-        _, applied_force_tangent = jvp(
-            applied_force,
-            (q, qd, u, tau_ext),
-            (q_tangent, qd_tangent, u_tangent, tau_ext_tangent),
-        )
+        if tau_ext_has_tangent:
+            applied_force_tangent = applied_force_tangent + tau_ext_tangent
 
         robot_has_tangent = any(
             tangent is not None
@@ -4410,12 +4416,18 @@ class PCS(SoftRobot):
             (
                 dID_dq,
                 dID_dqd,
-                mass_matrix,
                 _,
                 _,
                 _,
                 _,
-            ) = robot.inverse_dynamics_backward_pass(q, qd, qdd)
+                _,
+            ) = robot.inverse_dynamics_backward_pass(
+                q,
+                qd,
+                qdd,
+                materialize_wrench_history=False,
+                compute_acceleration_jacobian=False,
+            )
             inverse_dynamics_tangent = dID_dq @ q_tangent + dID_dqd @ qd_tangent
 
         qdd_tangent = robot._solve_inertia(
@@ -4696,6 +4708,9 @@ class PCS(SoftRobot):
         q: Array,
         qd: Array,
         qdd: Array,
+        *,
+        materialize_wrench_history: bool = True,
+        compute_acceleration_jacobian: bool = True,
     ) -> tuple[Array, Array, Array, Array, Array, Array, Array]:
         """
         Recurse the composite wrench and its Jacobians from tip to base.
@@ -4713,6 +4728,13 @@ class PCS(SoftRobot):
                 ``(self.num_dofs,)``.
             qdd (Array): Active generalized accelerations. Shape is
                 ``(self.num_dofs,)``.
+            materialize_wrench_history: Whether to return the per-interval
+                resultant-wrench derivative histories. State-Jacobian callers
+                can disable this because they only consume the three aggregate
+                inverse-dynamics Jacobians. Defaults to true.
+            compute_acceleration_jacobian: Whether to propagate
+                ``dID/dqdd``. Callers that already assembled the inertia matrix
+                can disable this duplicate recursion. Defaults to true.
 
         Returns:
             tuple[Array, Array, Array, Array, Array, Array, Array]: Tuple
@@ -4744,22 +4766,30 @@ class PCS(SoftRobot):
         zeros_6 = jnp.zeros((6,), dtype=q.dtype)
         zeros_6n = jnp.zeros((6, self.num_dofs), dtype=q.dtype)
         zeros_nn = jnp.zeros((self.num_dofs, self.num_dofs), dtype=q.dtype)
-        q_basis = jnp.eye(self.num_dofs, dtype=q.dtype)
+        acceleration_zeros_6n = (
+            zeros_6n
+            if compute_acceleration_jacobian
+            else jnp.empty((0, 0), dtype=q.dtype)
+        )
+        acceleration_zeros_nn = (
+            zeros_nn
+            if compute_acceleration_jacobian
+            else jnp.empty((0, 0), dtype=q.dtype)
+        )
         B_xi_segments = self.B_xi.reshape(
             self.num_segments,
             6,
             self.num_dofs,
         )
         xi_ref_segments = self.xi_ref.reshape(self.num_segments, 6)
-
         carry_init = (
             zeros_6,
             zeros_6n,
             zeros_6n,
-            zeros_6n,
+            acceleration_zeros_6n,
             zeros_nn,
             zeros_nn,
-            zeros_nn,
+            acceleration_zeros_nn,
         )
 
         def propagate_interval_backward(
@@ -4780,7 +4810,9 @@ class PCS(SoftRobot):
             ) = carry
 
             segment_idx = segment_indices[step_idx]
-            M = mass_weights[step_idx] * self.M_segments[segment_idx]
+            mass_diagonal = mass_weights[step_idx] * jnp.diagonal(
+                self.M_segments[segment_idx]
+            )
             g_i = g[step_idx]
             eta_i = eta[step_idx]
             etad_i = etad[step_idx]
@@ -4791,49 +4823,83 @@ class PCS(SoftRobot):
             Adginv_i = Adginv[step_idx]
             S_i = S[step_idx]
 
-            M_eta = M @ eta_i
+            def mass_action(value: Array) -> Array:
+                shape = (mass_diagonal.shape[0],) + (1,) * (value.ndim - 1)
+                return mass_diagonal.reshape(shape) * value
+
+            M_eta = mass_action(eta_i)
             gravity_i = se3.adjoint_inverse(g_i) @ self.g
-            F_i = M @ etad_i + se3.coadjoint(eta_i) @ M_eta - M @ gravity_i
-            N = se3.coadjoint(eta_i) @ M + se3.coadjoint_bar(M_eta)
+            F_i = (
+                mass_action(etad_i)
+                + se3.coadjoint_action(eta_i, M_eta)
+                - mass_action(gravity_i)
+            )
+
+            def convective_force_jacobian(twist_jacobian: Array) -> Array:
+                mass_twist_jacobian = mass_action(twist_jacobian)
+                return vmap(
+                    se3.coadjoint_action,
+                    in_axes=(None, 1),
+                    out_axes=1,
+                )(eta_i, mass_twist_jacobian) + vmap(
+                    se3.coadjoint_action,
+                    in_axes=(1, None),
+                    out_axes=1,
+                )(twist_jacobian, M_eta)
+
+            configuration_convective_jacobian = convective_force_jacobian(R_i)
+            velocity_convective_jacobian = convective_force_jacobian(J_i)
+            gravity_twist_jacobian = vmap(
+                se3.small_adjoint_action,
+                in_axes=(None, 1),
+                out_axes=1,
+            )(gravity_i, J_i)
 
             F_res_tip = F_res_child + F_i
             dF_res_dq_tip = (
                 dF_res_dq_child
-                + M @ A_i
-                + N @ R_i
-                - M @ se3.small_adjoint(gravity_i) @ J_i
+                + mass_action(A_i)
+                + configuration_convective_jacobian
+                - mass_action(gravity_twist_jacobian)
             )
-            dF_res_dqd_tip = dF_res_dqd_child + M @ Y_i + N @ J_i
-            dF_res_dqdd_tip = dF_res_dqdd_child + M @ J_i
+            dF_res_dqd_tip = (
+                dF_res_dqd_child + mass_action(Y_i) + velocity_convective_jacobian
+            )
+            if compute_acceleration_jacobian:
+                dF_res_dqdd_tip = dF_res_dqdd_child + mass_action(J_i)
 
             coAdg = Adginv_i.T
             F_res = coAdg @ F_res_tip
             dF_res_dq = coAdg @ dF_res_dq_tip
             dF_res_dqd = coAdg @ dF_res_dqd_tip
-            dF_res_dqdd = coAdg @ dF_res_dqdd_tip
+            if compute_acceleration_jacobian:
+                dF_res_dqdd = coAdg @ dF_res_dqdd_tip
+            else:
+                dF_res_dqdd = dF_res_dqdd_child
 
-            dF_res_dq = dF_res_dq + se3.coadjoint_bar(F_res) @ S_i
+            dF_res_dq = dF_res_dq + vmap(
+                se3.coadjoint_action,
+                in_axes=(1, None),
+                out_axes=1,
+            )(S_i, F_res)
 
             B_xi_i = B_xi_segments[segment_idx]
             xi_ref_i = xi_ref_segments[segment_idx]
             H_i = H_steps[step_idx]
 
-            def projected_wrench_row(q_unit: Array) -> Array:
-                dS_dq_direction = joint_dSdq_qd(
-                    H_i,
-                    B_xi_i,
-                    xi_ref_i,
-                    q,
-                    q_unit,
-                    self.global_eps,
-                )
-                return F_res @ dS_dq_direction
-
-            dSTF_res_dq = vmap(projected_wrench_row)(q_basis)
+            dSTF_res_dq = joint_dSTF_dq(
+                H_i,
+                B_xi_i,
+                xi_ref_i,
+                q,
+                F_res,
+                self.global_eps,
+            )
 
             dID_dq = dID_dq + S_i.T @ dF_res_dq + dSTF_res_dq
             dID_dqd = dID_dqd + S_i.T @ dF_res_dqd
-            dID_dqdd = dID_dqdd + S_i.T @ dF_res_dqdd
+            if compute_acceleration_jacobian:
+                dID_dqdd = dID_dqdd + S_i.T @ dF_res_dqdd
 
             carry_next = (
                 F_res,
@@ -4845,10 +4911,14 @@ class PCS(SoftRobot):
                 dID_dqdd,
             )
             output = (
-                F_res,
-                dF_res_dq,
-                dF_res_dqd,
-                dF_res_dqdd,
+                (
+                    F_res,
+                    dF_res_dq,
+                    dF_res_dqd,
+                    dF_res_dqdd,
+                )
+                if materialize_wrench_history
+                else None
             )
             return carry_next, output
 
@@ -4876,17 +4946,24 @@ class PCS(SoftRobot):
             reverse_indices,
         )
 
-        (
-            F_res,
-            dF_res_dq,
-            dF_res_dqd,
-            dF_res_dqdd,
-        ) = (jnp.flip(value, axis=0) for value in reverse_outputs)
-        step_shape = (self.num_segments, self.num_integration_points - 1)
-        F_res = F_res.reshape(*step_shape, 6)
-        dF_res_dq = dF_res_dq.reshape(*step_shape, 6, self.num_dofs)
-        dF_res_dqd = dF_res_dqd.reshape(*step_shape, 6, self.num_dofs)
-        dF_res_dqdd = dF_res_dqdd.reshape(*step_shape, 6, self.num_dofs)
+        if materialize_wrench_history:
+            (
+                F_res,
+                dF_res_dq,
+                dF_res_dqd,
+                dF_res_dqdd,
+            ) = (jnp.flip(value, axis=0) for value in reverse_outputs)
+            step_shape = (self.num_segments, self.num_integration_points - 1)
+            F_res = F_res.reshape(*step_shape, 6)
+            dF_res_dq = dF_res_dq.reshape(*step_shape, 6, self.num_dofs)
+            dF_res_dqd = dF_res_dqd.reshape(*step_shape, 6, self.num_dofs)
+            dF_res_dqdd = dF_res_dqdd.reshape(*step_shape, 6, self.num_dofs)
+        else:
+            F_res = jnp.empty((0, 6), dtype=q.dtype)
+            empty_derivative = jnp.empty((0, 6, self.num_dofs), dtype=q.dtype)
+            dF_res_dq = empty_derivative
+            dF_res_dqd = empty_derivative
+            dF_res_dqdd = empty_derivative
 
         return (
             dID_dq,
@@ -4924,6 +5001,7 @@ class PCS(SoftRobot):
             q,
             qd,
             qdd,
+            materialize_wrench_history=False,
         )
         return dID_dq, dID_dqd
 
@@ -5052,7 +5130,12 @@ class PCS(SoftRobot):
             _,
             _,
             _,
-        ) = self.inverse_dynamics_backward_pass(q, qd, qdd)
+        ) = self.inverse_dynamics_backward_pass(
+            q,
+            qd,
+            qdd,
+            materialize_wrench_history=False,
+        )
 
         d_elastic_dq = self.elastic_force_derivative_q(q)
         d_damping_dq, d_damping_dqd = self.damping_force_derivatives(q, qd)
