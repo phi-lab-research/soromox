@@ -59,11 +59,11 @@ def test_software_release_and_project_urls_are_version_specific():
     software_bibtex = _extract_bibtex(citation_docs, "software", citation_key)
     assert f"version = {{{version}}}," in software_bibtex
     assert (
-        f"url = {{https://github.com/tud-phi/soromox/releases/tag/v{version}}},"
+        f"url = {{https://github.com/phi-lab-research/soromox/releases/tag/v{version}}},"
         in software_bibtex
     )
     assert project["urls"]["Paper"] == f"https://doi.org/{ARXIV_DOI}"
-    assert project["urls"]["Citation"] == "https://tud-phi.github.io/soromox/citation/"
+    assert project["urls"]["Citation"] == "https://phi-lab-research.github.io/soromox/citation/"
 
 
 def test_controller_citation_identifies_relevant_thesis_chapter():

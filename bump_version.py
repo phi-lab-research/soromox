@@ -157,8 +157,8 @@ def update_software_bibtex_citation(
     )
     block = replace_required(
         block,
-        r"^(\s*url = )\{https://github\.com/tud-phi/soromox/releases/tag/v[^}]+\},$",
-        rf"\g<1>{{https://github.com/tud-phi/soromox/releases/tag/v{new_version}}},",
+        r"^(\s*url = )\{https://github\.com/phi-lab-research/soromox/releases/tag/v[^}]+\},$",
+        rf"\g<1>{{https://github.com/phi-lab-research/soromox/releases/tag/v{new_version}}},",
         description=f"citation release URL in {file_path}",
     )
     file_path.write_text(

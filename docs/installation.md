@@ -51,7 +51,7 @@
     For development or to get the latest features:
 
     ```bash
-    git clone https://github.com/tud-phi/soromox.git
+    git clone https://github.com/phi-lab-research/soromox.git
     cd soromox
     pip install -e .
     ```
@@ -94,7 +94,7 @@ uv sync --extra rendering
     documented compiler, Vulkan, Xvfb, and FFmpeg packages. macOS needs Xcode
     with its Metal Toolchain and Homebrew `cmake`, `ninja`, `openblas`,
     `glslang`, and `spirv-cross`. See the
-    [build instructions](https://github.com/tud-phi/soromox/tree/main/third_party/open3d)
+    [build instructions](https://github.com/phi-lab-research/soromox/tree/main/third_party/open3d)
     for prerequisites, environment variables, cache controls, validation commands,
     and other platforms. On Ubuntu 26.04 x86-64, Python 3.11–3.14 pass real
     Vulkan image and MP4 export plus modern and animated viewers under Xvfb.
@@ -104,7 +104,7 @@ uv sync --extra rendering
     Open3D patches.
 
     If importing Open3D and PyTorch together on macOS causes an OpenMP error,
-    see the [Open3D troubleshooting instructions](https://github.com/tud-phi/soromox/tree/main/third_party/open3d#macos-openmp-runtimes).
+    see the [Open3D troubleshooting instructions](https://github.com/phi-lab-research/soromox/tree/main/third_party/open3d#macos-openmp-runtimes).
 
     The patched Open3D source build is required for all supported Python
     versions. In a source checkout, use `uv sync --extra rendering`, or install
@@ -291,6 +291,6 @@ Test your installation with this quick verification script:
 !!! info "Need assistance?"
 
     - 📚 **Documentation**: Check our [API Reference](api/overview.md)
-    - 💬 **Discussions**: Join our [GitHub Discussions](https://github.com/tud-phi/soromox/discussions)  
-    - 🐛 **Issues**: Report bugs on [GitHub Issues](https://github.com/tud-phi/soromox/issues)
+    - 💬 **Discussions**: Join our [GitHub Discussions](https://github.com/phi-lab-research/soromox/discussions)  
+    - 🐛 **Issues**: Report bugs on [GitHub Issues](https://github.com/phi-lab-research/soromox/issues)
     - 📧 **Email**: Contact us at `mstolzle@mit.edu`
