@@ -126,7 +126,7 @@ def test_update_citations_synchronizes_version_date_and_year(tmp_path):
         "@software{soromox_v0_1_0,\n"
         "  year = {2025},\n"
         "  version = {0.1.0},\n"
-        "  url = {https://github.com/tud-phi/soromox/releases/tag/v0.1.0},\n"
+        "  url = {https://github.com/phi-lab-research/soromox/releases/tag/v0.1.0},\n"
         "}\n"
         "```\n"
     )
@@ -149,7 +149,7 @@ def test_update_citations_synchronizes_version_date_and_year(tmp_path):
     assert "year = {2026}," in markdown_content
     assert "version = {0.2.0}," in markdown_content
     assert (
-        "url = {https://github.com/tud-phi/soromox/releases/tag/v0.2.0},"
+        "url = {https://github.com/phi-lab-research/soromox/releases/tag/v0.2.0},"
         in markdown_content
     )
     assert "@misc{paper2025," in markdown_content

@@ -3,7 +3,7 @@
 Thank you for your interest in contributing to Soft Robot Models in jaX (SoRoMoX)! This guide will help you get started.
 
 This page is the canonical contributor workflow. The top-level
-[`CONTRIBUTING.md`](https://github.com/tud-phi/soromox/blob/main/CONTRIBUTING.md)
+[`CONTRIBUTING.md`](https://github.com/phi-lab-research/soromox/blob/main/CONTRIBUTING.md)
 is a compact entry point for repository visitors.
 
 ## Development Setup
@@ -304,7 +304,7 @@ git push origin feature/your-feature-name
 ## Maintainer releases
 
 Version management and publication are maintainer-only workflows. The
-[version and release guide](https://github.com/tud-phi/soromox/blob/main/VERSION_BUMP_README.md)
+[version and release guide](https://github.com/phi-lab-research/soromox/blob/main/VERSION_BUMP_README.md)
 documents the canonical branch and pull request process, tag automation, and
 recovery procedure.
 

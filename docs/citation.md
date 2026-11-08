@@ -40,7 +40,7 @@ additional software citation for that release:
   author = {Maximilian St{\"o}lzle and Solange Gribonval and Daniel {Feliu-Talegon} and Vito Daniele Perfetta and Michele Martini and Chuhan Zhang and Kiwan Wong and Daniela Rus and Cosimo {Della Santina}},
   year = {2026},
   version = {0.5.0},
-  url = {https://github.com/tud-phi/soromox/releases/tag/v0.5.0},
+  url = {https://github.com/phi-lab-research/soromox/releases/tag/v0.5.0},
 }
 ```
 
@@ -92,4 +92,4 @@ of the following thesis are material to the work, also cite:
 
 The citation guidance above is a scholarly request. SoRoMoX is distributed
 under the MIT License; redistribution requirements are defined by
-[`LICENSE.txt`](https://github.com/tud-phi/soromox/blob/main/LICENSE.txt).
+[`LICENSE.txt`](https://github.com/phi-lab-research/soromox/blob/main/LICENSE.txt).

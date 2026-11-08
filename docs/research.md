@@ -62,7 +62,7 @@ timestamps, without temporal or phase alignment:
 
 These RMSE values correspond to 0.14–1.20% of the 0.6 m beam length. The largest
 instantaneous tip-position difference is 14.14 mm for spatial PCS.
-See the [CPU benchmark reproduction instructions](https://github.com/tud-phi/soromox/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
+See the [CPU benchmark reproduction instructions](https://github.com/phi-lab-research/soromox/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
 for the simulation scripts, saved trajectories, and plotting command.
 
 ### Batched GPU rollouts
@@ -193,7 +193,7 @@ surface.
 
 ## Reproducing the results
 
-The [`paper_results/`](https://github.com/tud-phi/soromox/tree/main/paper_results)
+The [`paper_results/`](https://github.com/phi-lab-research/soromox/tree/main/paper_results)
 directory contains experiment entry points, canonical outputs, and
 workflow-specific notes. Install its dependencies from an editable checkout:
 

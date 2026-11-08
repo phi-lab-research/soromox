@@ -13,9 +13,9 @@ Soromox ships development benchmarking CLIs under `tools/benchmarks`:
 The benchmarks reported in the paper are available in `paper_results/` for
 reproducibility:
 
-- [Sequential CPU rollouts (Section IVa)](https://github.com/tud-phi/soromox/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
+- [Sequential CPU rollouts (Section IVa)](https://github.com/phi-lab-research/soromox/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
   compare SoRoMoX, SoRoSim, and PyElastica trajectories.
-- [Batched GPU rollouts (Section IVb)](https://github.com/tud-phi/soromox/tree/main/paper_results/secIVb_parallel_rollouts_gpu)
+- [Batched GPU rollouts (Section IVb)](https://github.com/phi-lab-research/soromox/tree/main/paper_results/secIVb_parallel_rollouts_gpu)
   measure simulation throughput across batch sizes and model sizes.
 
 ## Prerequisites

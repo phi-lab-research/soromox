@@ -271,13 +271,13 @@ all = [
 # maintainers, and where to support the project financially. The key is
 # what's used to render the link text on PyPI.
 [project.urls]  # Optional
-"Homepage" = "https://github.com/tud-phi/soromox"
-"Documentation" = "https://tud-phi.github.io/soromox"
-"Changelog" = "https://tud-phi.github.io/soromox/development/changelog/"
-"Bug Reports" = "https://github.com/tud-phi/soromox/issues"
+"Homepage" = "https://github.com/phi-lab-research/soromox"
+"Documentation" = "https://phi-lab-research.github.io/soromox"
+"Changelog" = "https://phi-lab-research.github.io/soromox/development/changelog/"
+"Bug Reports" = "https://github.com/phi-lab-research/soromox/issues"
 "Paper" = "https://doi.org/10.48550/arXiv.2608.06650"
-"Citation" = "https://tud-phi.github.io/soromox/citation/"
-"Source" = "https://github.com/tud-phi/soromox"
+"Citation" = "https://phi-lab-research.github.io/soromox/citation/"
+"Source" = "https://github.com/phi-lab-research/soromox"
 
 # The following would provide a command line executable called `sample`
 # which executes the function `main` from this package when invoked.

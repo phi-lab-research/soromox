@@ -6,12 +6,12 @@
 
 <div align="center">
 
-[![Test](https://github.com/tud-phi/soromox/actions/workflows/test.yml/badge.svg)](https://github.com/tud-phi/soromox/actions/workflows/test.yml)
+[![Test](https://github.com/phi-lab-research/soromox/actions/workflows/test.yml/badge.svg)](https://github.com/phi-lab-research/soromox/actions/workflows/test.yml)
 [![PyPI version](https://badge.fury.io/py/soromox.svg)](https://pypi.org/project/soromox/)
 [![arXiv](https://img.shields.io/badge/arXiv-2608.06650-b31b1b.svg)](https://arxiv.org/abs/2608.06650)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/github/license/tud-phi/soromox.svg)](https://github.com/tud-phi/soromox/blob/main/LICENSE.txt)
-[![Documentation](https://img.shields.io/badge/docs-live-brightgreen.svg)](https://tud-phi.github.io/soromox/)
+[![License](https://img.shields.io/github/license/phi-lab-research/soromox.svg)](https://github.com/phi-lab-research/soromox/blob/main/LICENSE.txt)
+[![Documentation](https://img.shields.io/badge/docs-live-brightgreen.svg)](https://phi-lab-research.github.io/soromox/)
 
 </div>
 
@@ -34,7 +34,7 @@ uses six application case studies to demonstrate differentiability,
 parallelization, and the control-oriented model interface.
 
 > **Note:** SoRoMoX succeeds
-> [JSRM](https://github.com/tud-phi/jax-soft-robot-modeling), replacing symbolic
+> [JSRM](https://github.com/phi-lab-research/jsrm), replacing symbolic
 > derivations with scalable numerical implementations and extending the model
 > families and common interfaces.
 
@@ -61,9 +61,9 @@ Following the model organization in Table II of the paper:
 
 | Model family | Planar implementation | Actuation modalities | Example instantiations |
 | --- | --- | --- | --- |
-| Articulated soft robot | [Soft pendulum](https://github.com/tud-phi/soromox/tree/main/examples/simulation/pendulum) | Generalized-coordinate (joint-torque), articulated-tendon, and McKibben actuation | [UMArm](https://tud-phi.github.io/soromox/api/systems/articulated/mckibben-umarm/) |
-| Piecewise constant strain (PCS) | [Planar PCS](https://github.com/tud-phi/soromox/blob/main/examples/simulation/pcs/simulate_planar_pcs.py) | Generalized-strain, threadlike, and functional-metamaterial (HSA) actuation | [I-SUPPORT](https://tud-phi.github.io/soromox/api/systems/pcs/isupport/) and [planar HSA](https://tud-phi.github.io/soromox/api/systems/pcs/planar-hsa/) |
-| Geometric variable strain (GVS) | — | Generalized-coordinate and threadlike actuation | [Tapered cable-driven soft tentacle](https://github.com/tud-phi/soromox/blob/main/examples/simulation/gvs/simulate_tendon_actuated_gvs.py) |
+| Articulated soft robot | [Soft pendulum](https://github.com/phi-lab-research/soromox/tree/main/examples/simulation/pendulum) | Generalized-coordinate (joint-torque), articulated-tendon, and McKibben actuation | [UMArm](https://phi-lab-research.github.io/soromox/api/systems/articulated/mckibben-umarm/) |
+| Piecewise constant strain (PCS) | [Planar PCS](https://github.com/phi-lab-research/soromox/blob/main/examples/simulation/pcs/simulate_planar_pcs.py) | Generalized-strain, threadlike, and functional-metamaterial (HSA) actuation | [I-SUPPORT](https://phi-lab-research.github.io/soromox/api/systems/pcs/isupport/) and [planar HSA](https://phi-lab-research.github.io/soromox/api/systems/pcs/planar-hsa/) |
+| Geometric variable strain (GVS) | — | Generalized-coordinate and threadlike actuation | [Tapered cable-driven soft tentacle](https://github.com/phi-lab-research/soromox/blob/main/examples/simulation/gvs/simulate_tendon_actuated_gvs.py) |
 
 ## Renderer examples
 
@@ -72,17 +72,17 @@ scene presets. These examples show the neutral studio preset in Open3D and the
 technical preset in Viser:
 
 <p align="center">
-  <a href="https://tud-phi.github.io/soromox/api/rendering/presets/">
+  <a href="https://phi-lab-research.github.io/soromox/api/rendering/presets/">
     <img src="docs/assets/rendering/presets/open3d_neutral.png" alt="Open3D neutral studio preset" width="48%"/>
   </a>
-  <a href="https://tud-phi.github.io/soromox/api/rendering/presets/">
+  <a href="https://phi-lab-research.github.io/soromox/api/rendering/presets/">
     <img src="docs/assets/rendering/presets/viser_technical.png" alt="Viser technical preset" width="48%"/>
   </a>
 </p>
 
 Generate the gallery with
 `python examples/rendering/preset_gallery.py --backend open3d` or
-`--backend viser`. See the [full preset gallery](https://tud-phi.github.io/soromox/api/rendering/presets/)
+`--backend viser`. See the [full preset gallery](https://phi-lab-research.github.io/soromox/api/rendering/presets/)
 for all six styles and both backends.
 
 ## Installation
@@ -111,14 +111,14 @@ python -m pip install "soromox[paper_results]" # paper reproduction workflows
 For an editable source installation:
 
 ```bash
-git clone https://github.com/tud-phi/soromox.git
+git clone https://github.com/phi-lab-research/soromox.git
 cd soromox
 python -m pip install -e .
 ```
 
 Contributors can add development extras with
 `python -m pip install -e ".[dev,docs,examples]"`; see
-[CONTRIBUTING.md](https://github.com/tud-phi/soromox/blob/main/CONTRIBUTING.md)
+[CONTRIBUTING.md](https://github.com/phi-lab-research/soromox/blob/main/CONTRIBUTING.md)
 for tests and tooling.
 
 ## Quick start
@@ -130,9 +130,9 @@ python examples/simulation/pendulum/simulate_pendulum.py
 python examples/simulation/pcs/simulate_planar_pcs.py
 ```
 
-The [Quick Start](https://tud-phi.github.io/soromox/user-guide/quick-start/)
+The [Quick Start](https://phi-lab-research.github.io/soromox/user-guide/quick-start/)
 introduces model construction, simulation, control, and rendering. The
-[examples catalogue](https://tud-phi.github.io/soromox/user-guide/examples/)
+[examples catalogue](https://phi-lab-research.github.io/soromox/user-guide/examples/)
 maps complete scripts to the supported models and workflows.
 
 ## Performance
@@ -153,7 +153,7 @@ in the paper's matched PCS and GVS benchmarks:
 
 On the reported RTX 5090 benchmark, increasing the leading batch size from 1 to
 1,024 raises GVS simulation throughput by up to 679.7×. See
-[Paper & Results](https://tud-phi.github.io/soromox/research/) for the full
+[Paper & Results](https://phi-lab-research.github.io/soromox/research/) for the full
 benchmark context and reproduction pointers.
 
 ## Application case studies
@@ -186,17 +186,17 @@ reinforcement learning.
 </p>
 
 See all six studies on the
-[Paper & Results](https://tud-phi.github.io/soromox/research/) page.
+[Paper & Results](https://phi-lab-research.github.io/soromox/research/) page.
 
 ## Documentation
 
-- [Documentation home](https://tud-phi.github.io/soromox/)
-- [Installation guide](https://tud-phi.github.io/soromox/installation/)
-- [Quick Start](https://tud-phi.github.io/soromox/user-guide/quick-start/)
-- [API reference](https://tud-phi.github.io/soromox/api/overview/)
-- [Rendering guide and gallery](https://tud-phi.github.io/soromox/api/rendering/)
-- [Paper & Results](https://tud-phi.github.io/soromox/research/)
-- [Citation guidance](https://tud-phi.github.io/soromox/citation/)
+- [Documentation home](https://phi-lab-research.github.io/soromox/)
+- [Installation guide](https://phi-lab-research.github.io/soromox/installation/)
+- [Quick Start](https://phi-lab-research.github.io/soromox/user-guide/quick-start/)
+- [API reference](https://phi-lab-research.github.io/soromox/api/overview/)
+- [Rendering guide and gallery](https://phi-lab-research.github.io/soromox/api/rendering/)
+- [Paper & Results](https://phi-lab-research.github.io/soromox/research/)
+- [Citation guidance](https://phi-lab-research.github.io/soromox/citation/)
 
 ## Citation
 
@@ -216,13 +216,13 @@ If you use SoRoMoX in academic work, please cite the associated preprint:
 ```
 
 For reproducible computational work, also report `soromox.__version__`.
-The [full citation guide](https://tud-phi.github.io/soromox/citation/)
+The [full citation guide](https://phi-lab-research.github.io/soromox/citation/)
 contains exact-version software citations and model- or controller-specific
 references.
 
 ## Contributing and license
 
 Contributions are welcome; start with
-[CONTRIBUTING.md](https://github.com/tud-phi/soromox/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/phi-lab-research/soromox/blob/main/CONTRIBUTING.md).
 SoRoMoX is distributed under the
-[MIT License](https://github.com/tud-phi/soromox/blob/main/LICENSE.txt).
+[MIT License](https://github.com/phi-lab-research/soromox/blob/main/LICENSE.txt).

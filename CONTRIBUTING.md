@@ -2,7 +2,7 @@
 
 Thank you for helping improve SoRoMoX. This file covers the shortest path to a
 working development checkout; the
-[complete contributor guide](https://tud-phi.github.io/soromox/development/contributing/)
+[complete contributor guide](https://phi-lab-research.github.io/soromox/development/contributing/)
 is the canonical reference for project conventions and workflows.
 
 ## Set up an editable checkout
