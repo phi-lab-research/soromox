@@ -7,6 +7,9 @@ functions that external Warp-native integrators can use with preallocated
 buffers. Public kernel symbols are loaded lazily and require the optional
 ``warp-lang`` package only when requested.
 
+The :mod:`.sections` module provides differentiable sectional inertia and
+constitutive functions and GVS material projection for native parameter updates.
+
 Loader and JAX transformation modules are implementation details and are not
 part of the stable integration API.
 """

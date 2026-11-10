@@ -280,6 +280,43 @@ class RodConstitutiveLaw:
         )
         return jnp.stack((area * factor, area * factor), axis=-1)
 
+    def material_diagonals(
+        self,
+        geometry: CrossSectionGeometry,
+        outer: Array,
+        inner: Array | None = None,
+        *,
+        poisson_ratio: Array | float = 0.0,
+    ) -> tuple[Array, Array, Array]:
+        """Return sectional unit Young's, shear and damping diagonals.
+
+        Args:
+            geometry: Cross-section family.
+            outer: Dimensions with arbitrary leading sample dimensions.
+            inner: Optional centred uniform-wall cavity dimensions.
+            poisson_ratio: Elastic Poisson ratio used for Cowper shear,
+                including the damping law.
+
+        Returns:
+            Three arrays of shape ``(..., 6)`` in angular-linear strain order.
+            Stiffness is ``E * young + G * shear``; scalar Kelvin–Voigt damping
+            is ``eta * damping``. Rotational mass inertia must independently
+            use the polar area moment, not the torsion constant.
+        """
+        _, iy, iz, area = section_properties(geometry, outer, inner)
+        torsion = self.torsion_constant(geometry, outer, inner)
+        shear = self.shear_areas(geometry, outer, inner, poisson_ratio=poisson_ratio)
+        zero = jnp.zeros_like(area)
+        young = jnp.stack((zero, iy, iz, area, zero, zero), axis=-1)
+        shear_diagonal = jnp.stack(
+            (torsion, zero, zero, zero, shear[..., 0], shear[..., 1]), axis=-1
+        )
+        damping = jnp.stack(
+            (torsion, 3 * iy, 3 * iz, 3 * area, shear[..., 0], shear[..., 1]),
+            axis=-1,
+        )
+        return young, shear_diagonal, damping
+
     def torsion_constant(
         self, geometry: CrossSectionGeometry, outer: Array, inner: Array | None = None
     ) -> Array:

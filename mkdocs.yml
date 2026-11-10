@@ -93,6 +93,7 @@ nav:
           - Warp:
             - Overview: api/execution/warp/index.md
             - GVS API: api/execution/warp/gvs.md
+            - Rod sections: api/execution/warp/sections.md
             - PCS API: api/execution/warp/pcs.md
       - Rendering:
           - Overview: api/rendering/index.md

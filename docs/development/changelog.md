@@ -14,6 +14,10 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Added
 
+- Differentiable native Warp rod-section kernels for the configurable solid and
+  hollow constitutive laws, with reusable unit-material diagonals and GVS basis
+  projection. See [Warp rod sections](../api/execution/warp/sections.md).
+
 - Shared rendering of installed and standalone fixed, free-space, and implicit
   threadlike paths in Matplotlib, Open3D, Viser (including Helicoidal), and planar
   OpenCV, with reuse of routing solutions for frames, batches, and playback. The
