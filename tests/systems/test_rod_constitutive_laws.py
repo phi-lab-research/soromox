@@ -89,8 +89,8 @@ def test_rectangular_shear_and_marshall_have_continuous_solid_limits(ratio):
 )
 def test_marshall_solid_error_against_series(ratio, relative_error):
     outer = jnp.array([1.0, ratio])
-    # Independent high-order Saint-Venant reference, used only for validation
-    # of Marshall's engineering extension to solid rectangles.
+    # Independent high-order Saint-Venant comparison reference for
+    # Marshall's engineering extension to solid rectangles.
     n = np.arange(1, 20000, 2)
     exact = (
         ratio
