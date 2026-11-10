@@ -36,8 +36,22 @@ def _properties(kind, dimensions):
 
 @pytest.mark.parametrize("kind", ["circular", "rectangular", "elliptical"])
 @pytest.mark.parametrize("tapered", [False, True])
-def test_gvs_solid_material_matrices_at_construction_and_after_updates(kind, tapered):
-    """Pin all six stiffness/damping entries, including polar-moment torsion."""
+@pytest.mark.parametrize("order", [0, 2])
+@pytest.mark.parametrize("scaled", [False, True])
+def test_gvs_solid_material_matrices_at_construction_and_after_updates(
+    kind, tapered, order, scaled
+):
+    """Preserve solid laws through projection, length scaling and material updates.
+
+    Args:
+        kind: Solid cross-section family.
+        tapered: Whether dimensions vary linearly along the link.
+        order: Maximum monomial degree for each strain component.
+        scaled: Whether rotational basis rows are divided by link length.
+
+    Returns:
+        None after checking stiffness, damping and mass against independent formulas.
+    """
     length, density = 0.3, 1200.0
     start = np.array([0.02] if kind == "circular" else [0.02, 0.06])
     end = (
@@ -71,23 +85,35 @@ def test_gvs_solid_material_matrices_at_construction_and_after_updates(kind, tap
                 basis=StrainBasisSpec(
                     type="monomial",
                     strain_selector=[1] * 6,
-                    basis_order=[0] * 6,
+                    basis_order=[order] * 6,
                 ),
                 num_gauss_points=5,
             )
-        ]
+        ],
+        scale_rotational_basis_by_length=scaled,
     )
-    # Independent quadrature integrates the degree-four section polynomials.
+    # Independent quadrature integrates section and basis products (degree <= 8).
     points, weights = np.polynomial.legendre.leggauss(8)
     points, weights = (points + 1) / 2, weights / 2
     for updated in (False, True):
         if updated:
             start, end = 1.2 * start, 1.2 * end
+            length, density = 1.3 * length, 1.1 * density
             young, shear, damping = 1.4e6, 5e5, 170.0
             section = robot.params.link.cross_section
-            robot = robot.update_link_params(
-                cross_section=section.replace(coefficients=1.2 * section.coefficients)
-            ).with_isotropic_material(
+            geometry_robot = robot.update_link_params(
+                cross_section=section.replace(coefficients=1.2 * section.coefficients),
+                length=jnp.array([length]),
+                density=jnp.array([density]),
+            )
+            # Geometry updates preserve canonical matrices until material is reapplied.
+            assert_allclose(
+                geometry_robot.params.link.stiffness, robot.params.link.stiffness
+            )
+            assert_allclose(
+                geometry_robot.params.link.damping, robot.params.link.damping
+            )
+            robot = geometry_robot.with_isotropic_material(
                 IsotropicMaterialParams(
                     young_modulus=young,
                     shear_modulus=shear,
@@ -110,14 +136,21 @@ def test_gvs_solid_material_matrices_at_construction_and_after_updates(kind, tap
         damping_diagonal = damping * np.stack(
             [polar, 3 * iy, 3 * iz, 3 * area, area, area], axis=-1
         )
+        # Independent monomial basis, including the off-diagonal modal couplings.
+        basis = np.stack(
+            [np.kron(np.eye(6), point ** np.arange(order + 1)) for point in points]
+        )
+        if scaled:
+            basis[:, :3] /= length
         assert_allclose(
             robot.params.link.stiffness[0],
-            np.diag(length * weights @ stiffness),
+            length * np.einsum("p,pri,pr,prj->ij", weights, basis, stiffness, basis),
             rtol=1e-12,
         )
         assert_allclose(
             robot.params.link.damping[0],
-            np.diag(length * weights @ damping_diagonal),
+            length
+            * np.einsum("p,pri,pr,prj->ij", weights, basis, damping_diagonal, basis),
             rtol=1e-12,
         )
         count = int(robot.num_integration_points[0])
