@@ -36,6 +36,7 @@ LINUX_PATCHES = [
     *COMMON_PATCHES,
     HERE / "linux_distribution_name.patch",
     HERE / "linux_static_curl.patch",
+    HERE / "linux_raycasting_fixed_rows.patch",
 ]
 
 

@@ -1,0 +1,13 @@
+--- a/cpp/open3d/t/geometry/RaycastingScene.cpp
++++ b/cpp/open3d/t/geometry/RaycastingScene.cpp
+@@ -1656,8 +1656,8 @@
+     Eigen::Matrix3f RT_invK = (RT * invK).cast<float>();
+ 
+     core::Tensor rays({height_px, width_px, 6}, core::Float32);
+-    Eigen::Map<Eigen::MatrixXf> rays_map(rays.GetDataPtr<float>(), 6,
+-                                         height_px * width_px);
++    Eigen::Map<Eigen::Matrix<float, 6, Eigen::Dynamic>> rays_map(
++            rays.GetDataPtr<float>(), 6, height_px * width_px);
+ 
+     Eigen::Matrix<float, 6, 1> r;
+     r.topRows<3>() = C.cast<float>();

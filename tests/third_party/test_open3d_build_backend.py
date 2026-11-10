@@ -165,3 +165,25 @@ def test_windows_build_uses_msvc_release_and_common_patches(
 
     manifest = json.loads((wheel.parents[3] / "soromox-build.json").read_text())
     assert manifest["platform"] == "windows-x86_64"
+
+
+@pytest.mark.parametrize("width,height", [(1, 1), (3, 2), (17, 9)])
+def test_pinhole_rays_preserve_origin_and_direction(width: int, height: int) -> None:
+    """Exercise the fixed six-row Eigen map with several column counts."""
+    np = pytest.importorskip("numpy")
+    o3d = pytest.importorskip("open3d")
+    intrinsic = np.array([[2.0, 0.0, 0.25], [0.0, 4.0, 0.75], [0.0, 0.0, 1.0]])
+    extrinsic = np.eye(4)
+    extrinsic[:3, 3] = [-1.0, -2.0, -3.0]
+
+    rays = o3d.t.geometry.RaycastingScene.create_rays_pinhole(
+        o3d.core.Tensor(intrinsic), o3d.core.Tensor(extrinsic), width, height
+    ).numpy()
+
+    expected = np.empty((height, width, 6), dtype=np.float32)
+    expected[..., :3] = [1.0, 2.0, 3.0]
+    y, x = np.indices((height, width))
+    expected[..., 3] = (x + 0.5 - 0.25) / 2.0
+    expected[..., 4] = (y + 0.5 - 0.75) / 4.0
+    expected[..., 5] = 1.0
+    np.testing.assert_allclose(rays, expected, rtol=1e-6, atol=1e-6)

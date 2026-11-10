@@ -13,6 +13,11 @@ source build reproducible. Stable release upgrades are deliberate changes that
 also update `BASE_VERSION`, the lock file, patch applicability and native
 validation.
 
+The Linux raycasting patch gives Eigen the known six-row size of the pinhole
+ray buffer. This avoids GCC 15's array-bounds diagnostic for a vectorized
+assignment from a six-element vector to a dynamically sized column, while
+keeping compiler warnings treated as errors.
+
 ## Ubuntu installation
 
 The Ubuntu source build needs the following packages. This is the exact package
