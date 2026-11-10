@@ -14,10 +14,6 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Added
 
-- Differentiable native Warp rod-section kernels for the configurable solid and
-  hollow constitutive laws, with reusable unit-material diagonals and GVS basis
-  projection. See [Warp rod sections](../api/execution/warp/sections.md).
-
 - Shared rendering of installed and standalone fixed, free-space, and implicit
   threadlike paths in Matplotlib, Open3D, Viser (including Helicoidal), and planar
   OpenCV, with reuse of routing solutions for frames, batches, and playback. The
@@ -60,9 +56,11 @@ Describe the delta from the last release, not intermediate development changes.
   and `TorsionRodModel` choices. Effective shear uses
   material-dependent Cowper factors for circles and Jourawski shear energy for
   rectangles. Saint-Venant torsion uses Marshall for rectangular solids/tubes
-  and exact formulas for circles, annuli, and solid ellipses. Defaults preserve
-  the released uniform shear and polar-moment torsion for solids; hollow links
-  require effective shear and Saint-Venant torsion. Paper configurations select
+  and exact formulas for circles, annuli, and solid ellipses. Differentiable
+  Warp kernels support these laws and their projection through GVS strain bases.
+  Defaults preserve the released uniform shear and polar-moment torsion for
+  solids; hollow links require effective shear and Saint-Venant torsion. Paper
+  configurations select
   the released models explicitly. See
   [rod constitutive laws](../api/systems/continuum-components.md#rod-constitutive-laws).
 - Python 3.15 support, with numerical tests and patched Open3D source-build

@@ -25,7 +25,20 @@ Vec6d = wp.types.vector(length=6, dtype=wp.float64)
 
 @wp.func
 def _section_properties(geometry: int, outer: wp.vec2d, inner: wp.vec2d) -> wp.vec4d:
-    """Return (polar moment, Iy, Iz, area) for centred material boundaries."""
+    """Return the area and second moments of a centred section.
+
+    Args:
+        geometry: CrossSectionGeometry value: 0 for circular, 1 for rectangular,
+            or 2 for solid elliptical sections. The caller validates this value.
+        outer: Outer dimensions [m]: radius in the first slot for circles,
+            height/width for rectangles, or elliptical semi-axes along y/z.
+        inner: Centred cavity dimensions [m], in the same order as ``outer``.
+            Use zero dimensions for solids; solid ellipses use ``outer`` only.
+
+    Returns:
+        Vector ``(Ix, Iy, Iz, area)``. The first three entries are second moments
+        [m^4], with ``Ix = Iy + Iz``; the last entry is material area [m^2].
+    """
     a, b = outer[0], outer[1]
     c, d = inner[0], inner[1]
     area = wp.float64(0.0)
@@ -54,7 +67,24 @@ def _rectangular_shear_area(
     inner_depth: wp.float64,
     inner_breadth: wp.float64,
 ) -> wp.float64:
-    """Integrate Jourawski Q²/b exactly with three Gauss points per strip."""
+    """Compute a rectangular effective shear area from Jourawski stress energy.
+
+    Three-point Gauss quadrature integrates Q²/b exactly within each strip of
+    constant material breadth, including both symmetric halves of the section.
+
+    Args:
+        depth: Outer dimension along the applied shear direction [m].
+        breadth: Outer dimension perpendicular to that direction [m].
+        inner_depth: Centred cavity dimension along the shear direction [m].
+            Use zero for a solid section.
+        inner_breadth: Centred cavity dimension perpendicular to the shear [m].
+            Use zero for a solid section. The caller validates that both cavity
+            dimensions are smaller than their outer dimensions.
+
+    Returns:
+        Effective shear area [m^2] obtained by matching the energy of the
+        assumed Jourawski shear field.
+    """
     half = depth / wp.float64(2.0)
     inner_half = inner_depth / wp.float64(2.0)
     strip = half - inner_half
@@ -91,30 +121,28 @@ def rod_section_function(
     *,
     hollow: bool = False,
 ) -> wp.Function:
-    """Build a Warp function returning unit-material diagonals for one section.
+    """Build a differentiable Warp function for one rod section.
+
+    The cache key contains geometry, law and cavity choices. Dimensions and
+    elastic Poisson ratio remain runtime inputs. The caller validates finite
+    positive dimensions, strictly interior cavities, a uniform rectangular
+    wall, and ``-1 < nu <= 0.5`` for Cowper shear before launching.
 
     Args:
-        geometry: Circular, rectangular or solid elliptical section.
-        law: Same independent shear/torsion choices as the GVS construction API.
-        hollow: Whether inner dimensions describe a cavity. Hollow ellipses and
-            unsupported law combinations are rejected before compilation.
+        geometry: Circular, rectangular or solid elliptical section family.
+        law: Independent transverse-shear and torsion choices.
+        hollow: Whether inner dimensions describe a centred cavity.
 
     Returns:
-        wp.Function: A Warp function ``f(outer: vec2d, inner: vec2d, nu: float64)`` returning
-            four six-vectors ``(inertia, young, shear, damping)``. Multiply inertia
-            by density, form stiffness as ``E * young + G * shear`` and damping as
-            ``eta * damping``. Order is angular then linear (x, y, z).
-            Inertia uses the polar area moment, independently of torsion choice.
+        Specialized function ``section(outer, inner, nu)`` returning
+        ``(inertia, young, shear, damping)`` in angular-linear strain order.
+        Multiply inertia by density, form stiffness as ``E * young + G * shear``,
+        and form Kelvin–Voigt damping as ``eta * damping``. The returned
+        function's docstring describes its arguments, component units and outputs.
 
-            Dimensions are radius (second slot ignored), rectangle height/width,
-            or ellipse semi-axes along y/z. Solid functions ignore ``inner``.
-            Hollow rectangles require a centred uniform wall. Callers validate
-            finite positive dimensions, strictly interior cavities, and
-            ``-1 < nu <= 0.5`` for Cowper shear before launching. ``nu`` is the
-            elastic Poisson ratio, also for damping; unused laws ignore it.
-
-            The function supports Warp reverse-mode differentiation. Its cache key
-            contains only static choices, never dimensions or material values.
+    Raises:
+        ValueError: If the geometry value or geometry/law/cavity combination
+            is unsupported.
     """
     geometry = CrossSectionGeometry(geometry)
     law.validate_geometry(geometry, hollow)
@@ -126,6 +154,28 @@ def rod_section_function(
 
     @wp.func
     def section(outer: wp.vec2d, inner: wp.vec2d, nu: wp.float64):
+        """Evaluate sectional inertia and unit-material constitutive diagonals.
+
+        Geometry, law and cavity topology are fixed by the enclosing factory.
+
+        Args:
+            outer: Outer dimensions [m]: circle radius in slot zero (slot one is
+                unused), rectangle height/width, or ellipse semi-axes along y/z.
+            inner: Centred cavity dimensions [m], ordered like ``outer``. Solid
+                specializations use zero cavity dimensions independently of this input.
+            nu: Elastic Poisson ratio, dimensionless. Cowper shear requires
+                ``-1 < nu <= 0.5`` and uses the same value for stiffness and damping.
+                Other shear laws are independent of this input.
+
+        Returns:
+            Tuple ``(inertia, young, shear, damping)`` of six-vectors in angular-linear
+            x/y/z order. ``inertia`` is ``(Ix, Iy, Iz, A, A, A)``, with moments [m^4]
+            and area [m^2]. ``young`` is ``(0, Iy, Iz, A, 0, 0)``; ``shear`` is
+            ``(J, 0, 0, 0, As_y, As_z)``; ``damping`` is
+            ``(J, 3*Iy, 3*Iz, 3*A, As_y, As_z)``. J has units [m^4] and the
+            effective shear areas have units [m^2]. Rotational mass inertia uses
+            the polar moment Ix independently of the torsion constant J.
+        """
         cavity = wp.vec2d(wp.float64(0.0))
         if wp.static(hollow):
             cavity = inner
@@ -193,21 +243,25 @@ def rod_section_kernel(
     *,
     hollow: bool = False,
 ) -> wp.Kernel:
-    """Build a batched kernel for :func:`rod_section_function`.
+    """Build a batched kernel for the selected rod section law.
+
+    Samples may span links or worlds sharing the static choices, including
+    samples of tapered profiles. Allocate and retain input/output buffers before
+    launching or capturing a CUDA graph. Launch the returned kernel with ``dim=N``.
 
     Args:
-        geometry: Section geometry.
-        law: Rod constitutive choices, validated by the function factory.
-        hollow: Whether sections have a cavity.
+        geometry: Circular, rectangular or solid elliptical section family.
+        law: Independent transverse-shear and torsion choices.
+        hollow: Whether sections have a centred cavity.
 
     Returns:
-        wp.Kernel: Kernel with inputs ``outer, inner`` (``wp.array[wp.vec2d]``), ``nu``
-            (``wp.array[wp.float64]``) and outputs ``inertia, young, shear, damping``
-            (each ``wp.array2d[wp.float64]`` of shape ``(N, 6)``). Launch with
-            ``dim=N``; all inputs have N entries. Caller owns distinct output
-            buffers. Solids ignore inner values. Samples may span any links or
-            worlds sharing the static choices, including tapered profiles.
-            No allocation or device transfer occurs during a launch.
+        Specialized kernel ``evaluate(outer, inner, nu, inertia, young, shear,
+        damping)`` that writes four arrays of shape ``(N, 6)``. Its docstring
+        specifies every input and output buffer, component units and mutation.
+
+    Raises:
+        ValueError: If the geometry value or geometry/law/cavity combination
+            is unsupported.
     """
     section = rod_section_function(geometry, law, hollow=hollow)
 
@@ -221,6 +275,33 @@ def rod_section_kernel(
         shear: wp.array2d[wp.float64],
         damping: wp.array2d[wp.float64],
     ):
+        """Write the sectional inertia and material diagonals for a batch of samples.
+
+        Launch with ``dim=N``. Geometry and law choices come from the enclosing
+        factory. Each thread owns one row in each distinct caller-owned output.
+
+        Args:
+            outer: Outer dimensions [m], shape ``(N,)`` of two-component vectors.
+                Store circle radius in slot zero, rectangle height/width, or ellipse
+                semi-axes along material y/z.
+            inner: Cavity dimensions [m], shape ``(N,)`` in the same vector layout.
+                Solid specializations are independent of these values.
+            nu: Elastic Poisson ratios, dimensionless, shape ``(N,)``. Used by
+                Cowper shear in both stiffness and damping.
+            inertia: Output unit-density inertia diagonals, shape ``(N, 6)``:
+                ``(Ix, Iy, Iz, A, A, A)``, with angular entries [m^4] and linear
+                entries [m^2].
+            young: Output unit-Young's-modulus diagonals, shape ``(N, 6)``:
+                ``(0, Iy, Iz, A, 0, 0)``. Moments are [m^4] and area is [m^2].
+            shear: Output unit-shear-modulus diagonals, shape ``(N, 6)``:
+                ``(J, 0, 0, 0, As_y, As_z)``. J is [m^4]; effective areas are [m^2].
+            damping: Output unit-damping diagonals, shape ``(N, 6)``:
+                ``(J, 3*Iy, 3*Iz, 3*A, As_y, As_z)``. Angular entries are [m^4]
+                and linear entries are [m^2].
+
+        Returns:
+            None. Overwrites ``inertia``, ``young``, ``shear`` and ``damping`` in place.
+        """
         sample = wp.tid()
         m, e, g, d = section(outer[sample], inner[sample], nu[sample])
         for row in range(6):
@@ -244,25 +325,39 @@ def project_rod_material_kernel(
     shear_operators: wp.array3d[wp.float64],
     damping_operators: wp.array3d[wp.float64],
 ):
-    """Project sectional diagonals through GVS strain bases, with autodiff.
+    """Project sectional material diagonals through GVS strain bases.
 
-    Launch over ``(num_links, max_dof, max_dof)``. Each thread writes one full
-    matrix entry, integrating ``B.T @ diag(c) @ B`` without atomics or scratch.
-    Samples for a link must occupy a contiguous range in the packed arrays.
-    Mixed quadrature sizes and laws are supported by preparing each group's
-    sectional output views before projection. No output initialization is needed.
+    Launch over ``(num_links, max_dof, max_dof)``. Each thread integrates one
+    matrix entry of ``B.T @ diag(c) @ B`` over a link's contiguous sample range.
+    Links may use different quadrature counts and sectional laws. The kernel
+    supports reverse-mode differentiation through its floating-point inputs.
 
     Args:
-        offsets: INT32 sample boundaries, length num_links + 1.
-        basis: FP64 shape (num_samples, 6, max_dof), zero padded, including any
-            rotational length scaling selected by the model.
-        weights: FP64 physical quadrature weights, including link length.
-        young: Unit Young's-modulus diagonals, shape (num_samples, 6).
-        shear: Unit shear-modulus diagonals, same shape.
-        damping: Unit damping diagonals, same shape.
-        young_operators: Output shape (num_links, max_dof, max_dof).
-        shear_operators: Output with the same shape.
-        damping_operators: Output with the same shape.
+        offsets: Sample boundaries, shape ``(num_links + 1,)``. Link i uses
+            samples ``offsets[i]:offsets[i + 1]``.
+        basis: Strain bases, shape ``(num_samples, 6, max_dof)``, including
+            the model's rotational length scaling and zero-padded coordinates.
+            Each row maps generalized coordinates to angular strain [1/m] or
+            dimensionless linear strain in angular-linear x/y/z order.
+        weights: Physical quadrature weights [m], shape ``(num_samples,)``,
+            including each link's length.
+        young: Unit-Young's-modulus diagonals, shape ``(num_samples, 6)``:
+            ``(0, Iy, Iz, A, 0, 0)``, with moments [m^4] and area [m^2].
+        shear: Unit-shear-modulus diagonals, shape ``(num_samples, 6)``:
+            ``(J, 0, 0, 0, As_y, As_z)``, with J [m^4] and shear areas [m^2].
+        damping: Unit-damping diagonals, shape ``(num_samples, 6)``:
+            ``(J, 3*Iy, 3*Iz, 3*A, As_y, As_z)``, with angular entries [m^4]
+            and linear entries [m^2].
+        young_operators: Output unit-Young's-modulus matrices, shape
+            ``(num_links, max_dof, max_dof)``.
+        shear_operators: Output unit-shear-modulus matrices, same shape.
+            Form generalized stiffness as ``E * young_operators + G * shear_operators``.
+        damping_operators: Output unit-damping matrices, same shape.
+            Form generalized damping as ``eta * damping_operators``.
+
+    Returns:
+        None. Overwrites all three output operator arrays in place. Their units
+        follow the supplied generalized-coordinate basis and sectional diagonals.
     """
     link, row, column = wp.tid()
     e, g, d = wp.float64(0.0), wp.float64(0.0), wp.float64(0.0)

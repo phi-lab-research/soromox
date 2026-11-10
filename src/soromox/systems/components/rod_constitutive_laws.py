@@ -184,6 +184,14 @@ class RodConstitutiveLaw:
     torsion: TorsionRodModel = TorsionRodModel.POLAR_MOMENT
 
     def __post_init__(self) -> None:
+        """Validate the shear and torsion selections.
+
+        Returns:
+            None. The immutable law retains the supplied model choices.
+
+        Raises:
+            TypeError: If either selection uses an unsupported enum type.
+        """
         if not isinstance(self.transverse_shear, TransverseShearRodModel):
             raise TypeError("transverse_shear must be a TransverseShearRodModel.")
         if not isinstance(self.torsion, TorsionRodModel):

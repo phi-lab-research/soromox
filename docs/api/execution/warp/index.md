@@ -14,7 +14,6 @@ The public child namespaces are:
 
 - [GVS Warp API](gvs.md)
 - [PCS Warp API](pcs.md)
-- [Rod section API](sections.md)
 
 ::: soromox.execution.warp
     options:

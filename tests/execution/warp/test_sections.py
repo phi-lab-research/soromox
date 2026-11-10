@@ -51,11 +51,25 @@ VALID = [
 
 
 def device():
+    """Select the CPU or explicitly requested CUDA test device.
+
+    Returns:
+        CUDA device alias when SOROMOX_TEST_CUDA=1, otherwise the CPU alias.
+    """
     return "cuda:0" if os.environ.get("SOROMOX_TEST_CUDA") == "1" else "cpu"
 
 
 def samples(geometry, hollow):
-    """Asymmetric shapes, taper, auxetic materials and near limiting cavities."""
+    """Build tapered sections spanning auxetic materials and cavity limits.
+
+    Args:
+        geometry: Cross-section family used to construct cavity dimensions.
+        hollow: Whether samples contain a centred cavity.
+
+    Returns:
+        Outer dimensions [m], inner dimensions [m], and dimensionless Poisson
+        ratios, with shapes ``(6, 2)``, ``(6, 2)`` and ``(6,)`` respectively.
+    """
     scale = np.array([1.0, 0.8, 0.7, 0.6, 0.9, 1.1])
     outer = scale[:, None] * np.array([[0.04, 0.07]])
     inner = np.zeros_like(outer)
@@ -71,6 +85,20 @@ def samples(geometry, hollow):
 
 
 def reference(geometry, law, hollow, outer, inner, nu):
+    """Evaluate the sectional inertia and material diagonals in JAX.
+
+    Args:
+        geometry: Cross-section family.
+        law: Selected shear and torsion models.
+        hollow: Whether inner dimensions represent a cavity.
+        outer: Outer dimensions [m], shape ``(N, 2)``.
+        inner: Cavity dimensions [m], shape ``(N, 2)``.
+        nu: Elastic Poisson ratios, dimensionless, shape ``(N,)``.
+
+    Returns:
+        Tuple of unit inertia, Young's, shear and damping arrays, each shape
+        ``(N, 6)``, in angular-linear x/y/z order.
+    """
     dims = outer[:, :1] if geometry == Geometry.CIRCULAR else outer
     cavity = inner[:, :1] if geometry == Geometry.CIRCULAR else inner
     cavity = cavity if hollow else None
@@ -80,6 +108,18 @@ def reference(geometry, law, hollow, outer, inner, nu):
 
 
 def buffers(outer, inner, nu, *, grad=False):
+    """Allocate native section inputs and caller-owned output buffers.
+
+    Args:
+        outer: Outer section dimensions [m], shape ``(N, 2)``.
+        inner: Cavity dimensions [m], shape ``(N, 2)``.
+        nu: Elastic Poisson ratios, dimensionless, shape ``(N,)``.
+        grad: Whether inputs and outputs require Warp gradients.
+
+    Returns:
+        Input array list ``[outer, inner, nu]`` and output array list
+        ``[inertia, young, shear, damping]`` for the section kernel.
+    """
     inputs = [
         wp.array(a, dtype=dtype, device=device(), requires_grad=grad)
         for a, dtype in zip(
@@ -95,6 +135,16 @@ def buffers(outer, inner, nu, *, grad=False):
 
 @pytest.mark.parametrize("geometry,law,hollow", VALID)
 def test_section_values_and_parameter_updates(geometry, law, hollow):
+    """Verify sectional values and runtime geometry updates against JAX.
+
+    Args:
+        geometry: Cross-section family under test.
+        law: Supported shear and torsion law combination.
+        hollow: Whether the section contains a centred cavity.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     outer, inner, nu = samples(geometry, hollow)
     kernel = rod_section_kernel(geometry, law, hollow=hollow)
     assert kernel is rod_section_kernel(geometry, law, hollow=hollow)
@@ -112,6 +162,17 @@ def test_section_values_and_parameter_updates(geometry, law, hollow):
 
 @pytest.mark.parametrize("geometry,shear,torsion,hollow", CASES)
 def test_static_choices_validate_before_compilation(geometry, shear, torsion, hollow):
+    """Reject unsupported static section choices before Warp compilation.
+
+    Args:
+        geometry: Cross-section family under test.
+        shear: Transverse-shear model in the compatibility sweep.
+        torsion: Torsion model in the compatibility sweep.
+        hollow: Whether the section contains a centred cavity.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     law = RodConstitutiveLaw(shear, torsion)
     if (geometry, law, hollow) in VALID:
         assert rod_section_function(geometry, law, hollow=hollow) is not None
@@ -122,6 +183,16 @@ def test_static_choices_validate_before_compilation(geometry, shear, torsion, ho
 
 @pytest.mark.parametrize("geometry,law,hollow", VALID)
 def test_section_adjoints_match_jax(geometry, law, hollow):
+    """Compare all native sectional input adjoints with JAX.
+
+    Args:
+        geometry: Cross-section family under test.
+        law: Supported shear and torsion law combination.
+        hollow: Whether the section contains a centred cavity.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     outer, inner, nu = samples(geometry, hollow)
     # Derivatives away from geometric endpoints; compare all output channels.
     outer, inner, nu = outer[2:3], inner[2:3], nu[2:3]
@@ -149,7 +220,11 @@ def test_section_adjoints_match_jax(geometry, law, hollow):
 
 
 def test_projection_values_and_adjoints():
-    """Mixed sample counts, dense bases, padded DOFs and physical weights."""
+    """Verify projection values and adjoints for mixed sample counts and padded bases.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     rng = np.random.default_rng(17)
     offsets = np.array([0, 5, 8], np.int32)
     basis = rng.normal(size=(8, 6, 7))
@@ -175,6 +250,16 @@ def test_projection_values_and_adjoints():
         )
 
     def ref(basis, weights, *diagonals):
+        """Project packed sectional diagonals into link operators using JAX.
+
+        Args:
+            basis: Sampled strain bases, shape ``(8, 6, 7)``.
+            weights: Physical quadrature weights [m], shape ``(8,)``.
+            diagonals: Three unit-material diagonal arrays, each shape ``(8, 6)``.
+
+        Returns:
+            Tuple of three projected operator arrays, each shape ``(2, 7, 7)``.
+        """
         return tuple(
             jnp.stack(
                 [
@@ -210,7 +295,11 @@ def test_projection_values_and_adjoints():
 
 
 def test_mixed_gvs_material_projection():
-    """Native sections and projection reproduce actual tapered GVS operators."""
+    """Reproduce tapered mixed-geometry GVS material operators with native kernels.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     from soromox.systems.gvs.construction import (
         _basis_at_points,
         material_operators_from_params,
@@ -286,6 +375,15 @@ def test_mixed_gvs_material_projection():
 @pytest.mark.parametrize("geometry", [Geometry.CIRCULAR, Geometry.RECTANGULAR])
 @pytest.mark.parametrize("aspect", [1.0, 2.0, 10.0])
 def test_cavity_closure_and_thin_wall_limits(geometry, aspect):
+    """Verify solid-limit continuity and independent thin-wall formulas.
+
+    Args:
+        geometry: Cross-section family under test.
+        aspect: Ratio of outer width to height for rectangular sections.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     law = RodConstitutiveLaw(Shear.EFFECTIVE_AREA, Torsion.SAINT_VENANT)
     outer = np.array([[0.04, 0.04 * aspect]])
     nu = np.array([0.3])
@@ -337,6 +435,11 @@ def test_cavity_closure_and_thin_wall_limits(geometry, aspect):
     os.environ.get("SOROMOX_TEST_CUDA") != "1", reason="requires CUDA graph capture"
 )
 def test_section_cuda_graph_reuses_runtime_inputs():
+    """Verify graph replay uses updated geometry in retained input buffers.
+
+    Returns:
+        None. Numerical or compatibility assertions must pass.
+    """
     law = RodConstitutiveLaw(Shear.EFFECTIVE_AREA, Torsion.SAINT_VENANT)
     outer, inner, nu = samples(Geometry.RECTANGULAR, True)
     inputs, outputs = buffers(outer, inner, nu)

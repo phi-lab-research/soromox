@@ -216,6 +216,18 @@ def material_operators_from_params(
             length: Array = length,
             weights: Array = weights,
         ) -> Array:
+            """Integrate a unit-material diagonal through one link's strain basis.
+
+            Args:
+                diagonal: Sectional diagonal values, shape ``(num_points, 6)``.
+                basis: Strain bases, shape ``(num_points, 6, max_dof)``, including
+                    the model's rotational length scaling.
+                length: Physical link length [m].
+                weights: Dimensionless quadrature weights, shape ``(num_points,)``.
+
+            Returns:
+                Generalized unit-material operator, shape ``(max_dof, max_dof)``.
+            """
             return length * jnp.einsum(
                 "p,pri,pr,prj->ij", weights, basis, diagonal, basis
             )
