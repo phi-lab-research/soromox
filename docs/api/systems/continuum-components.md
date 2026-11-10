@@ -204,6 +204,12 @@ differ from \(J\).
 | `TorsionRodModel.POLAR_MOMENT` (default) | Solid sections; torsional stiffness is \(G(I_y+I_z)\). |
 | `TorsionRodModel.SAINT_VENANT` | Marshall for solid/hollow rectangles; exact circular/annular and solid elliptical torsion. |
 
+For solid circular and rectangular links, consider `EFFECTIVE_AREA` when
+transverse shear contributes appreciably to deformation, especially for short,
+thick links under transverse loading. It accounts approximately for nonuniform
+shear stress; its effect on overall deflection depends on the geometry and
+loading. Hollow links require this choice at every supported wall thickness.
+
 For a rectangular tube, select both alternatives explicitly:
 
 ```python

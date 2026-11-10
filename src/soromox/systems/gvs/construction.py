@@ -201,40 +201,13 @@ def material_operators_from_params(
             params.link.cross_section.coefficients[index], segment.link, points
         )
         geometry = segment.link.cross_section_geometry
-        section = segment.link.constitutive_law.cross_section_properties(
-            geometry,
-            outer,
-            inner,
-            poisson_ratio=0.0 if poisson_ratios is None else poisson_ratios[index],
-        )
-        iy, iz = section.second_moments[:, 0], section.second_moments[:, 1]
-        ix, area = iy + iz, section.area
-        torsion, shear_areas = section.torsion_constant, section.shear_areas
-        young_diagonal = jnp.stack(
-            [jnp.zeros_like(ix), iy, iz, area, jnp.zeros_like(ix), jnp.zeros_like(ix)],
-            axis=1,
-        )
-        shear_diagonal = jnp.stack(
-            [
-                torsion,
-                jnp.zeros_like(ix),
-                jnp.zeros_like(ix),
-                jnp.zeros_like(ix),
-                shear_areas[:, 0],
-                shear_areas[:, 1],
-            ],
-            axis=1,
-        )
-        damping_diagonal = jnp.stack(
-            [
-                torsion,
-                3.0 * iy,
-                3.0 * iz,
-                3.0 * area,
-                shear_areas[:, 0],
-                shear_areas[:, 1],
-            ],
-            axis=1,
+        young_diagonal, shear_diagonal, damping_diagonal = (
+            segment.link.constitutive_law.material_diagonals(
+                geometry,
+                outer,
+                inner,
+                poisson_ratio=0.0 if poisson_ratios is None else poisson_ratios[index],
+            )
         )
 
         def project(
@@ -243,9 +216,21 @@ def material_operators_from_params(
             length: Array = length,
             weights: Array = weights,
         ) -> Array:
-            local = vmap(jnp.diag)(diagonal)
-            integrand = vmap(lambda b, c: b.T @ c @ b)(basis, local)
-            return length * jnp.sum(weights[:, None, None] * integrand, axis=0)
+            """Integrate a unit-material diagonal through one link's strain basis.
+
+            Args:
+                diagonal: Sectional diagonal values, shape ``(num_points, 6)``.
+                basis: Strain bases, shape ``(num_points, 6, max_dof)``, including
+                    the model's rotational length scaling.
+                length: Physical link length [m].
+                weights: Dimensionless quadrature weights, shape ``(num_points,)``.
+
+            Returns:
+                Generalized unit-material operator, shape ``(max_dof, max_dof)``.
+            """
+            return length * jnp.einsum(
+                "p,pri,pr,prj->ij", weights, basis, diagonal, basis
+            )
 
         young_operators.append(project(young_diagonal))
         shear_operators.append(project(shear_diagonal))

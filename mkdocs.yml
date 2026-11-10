@@ -1,10 +1,10 @@
 site_name: Soft Robot Models in jaX (SoRoMoX)
 site_description: High-performance kinematic and dynamic models of continuum and articulated soft robots using JAX
 site_author: Maximilian Stölzle, Solange Gribonval, Daniel Feliu-Talegon, Vito Daniele Perfetta, Michele Martini, Chuhan Zhang, Kiwan Wong, Daniela Rus, and Cosimo Della Santina
-site_url: https://tud-phi.github.io/soromox
+site_url: https://phi-lab-research.github.io/soromox
 
-repo_name: tud-phi/soromox
-repo_url: https://github.com/tud-phi/soromox
+repo_name: phi-lab-research/soromox
+repo_url: https://github.com/phi-lab-research/soromox
 edit_uri: edit/main/docs/
 not_in_nav: 404.md
 
@@ -214,7 +214,7 @@ extra:
     provider: mike
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/tud-phi/soromox
+      link: https://github.com/phi-lab-research/soromox
       name: View on GitHub
     - icon: fontawesome/solid/file-lines
       link: https://arxiv.org/abs/2608.06650
@@ -240,7 +240,7 @@ extra:
           data: 0
           note: >- 
             Thanks for your feedback! Help us improve this page by
-            <a href="https://github.com/tud-phi/soromox/issues/new/?title=[Feedback]+{title}+-+{url}" target="_blank" rel="noopener">telling us what you need</a>.
+            <a href="https://github.com/phi-lab-research/soromox/issues/new/?title=[Feedback]+{title}+-+{url}" target="_blank" rel="noopener">telling us what you need</a>.
 
 watch:
   - src/soromox

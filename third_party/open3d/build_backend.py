@@ -24,7 +24,6 @@ RUNTIME_REQUIREMENTS = (
     "dash>=2.6.0",
     "werkzeug>=3.0.0",
     "flask>=3.0.0",
-    "ipywidgets>=8.0.4",
     "nbformat>=5.7.0",
     "configargparse",
 )
@@ -37,6 +36,7 @@ LINUX_PATCHES = [
     *COMMON_PATCHES,
     HERE / "linux_distribution_name.patch",
     HERE / "linux_static_curl.patch",
+    HERE / "linux_raycasting_fixed_rows.patch",
 ]
 
 

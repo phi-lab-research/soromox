@@ -14,6 +14,31 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Added
 
+- Shared rendering of installed and standalone fixed, free-space, and implicit
+  threadlike paths in Matplotlib, Open3D, Viser (including Helicoidal), and planar
+  OpenCV, with reuse of routing solutions for frames, batches, and playback. The
+  hollow-tendon example saves complete routing solutions for replay with all four
+  backends.
+
+- Configuration-dependent threadlike routing for PlanarPCS, PCS, and GVS:
+  straight spans between prescribed guides, or differentiable shortest paths
+  inside circular lumens using `slsqp-jax`. Both integrate with
+  `ThreadlikeActuator`, `ThreadlikeTransmission`, and `ThreadlikeImpedance` for
+  lengths, actuator coordinates, and force maps, including mixed routing groups,
+  moving joints, and floating bases; see
+  [PR #238](https://github.com/phi-lab-research/soromox/pull/238) and
+  [PR #248](https://github.com/phi-lab-research/soromox/pull/248).
+- Native FP64 Warp kernels for free-space threadlike routing and actuation,
+  with batched execution, reusable buffers, and CUDA graph support.
+
+- Added optional continuum Capstan friction for active threadlike actuation in
+  PCS, PlanarPCS, and GVS, with analytical routed-path turn and custom friction
+  laws; see [threadlike actuation](../api/actuation/threadlike.md#continuum-capstan-friction).
+
+- Native Warp GVS kernels for heterogeneous worlds, with FP64 dynamics,
+  kinematics and actuation across different joints and strain bases; see
+  [PR #227](https://github.com/phi-lab-research/soromox/pull/227).
+
 - GVS-based `Helicoidal` models for trimmed-helicoid robots, with analytic
   sectional mechanics, per-strain damping, helix-domain material inputs,
   strand-derived inertia, a simulation example, and a dedicated Viser renderer.
@@ -23,7 +48,7 @@ Describe the delta from the last release, not intermediate development changes.
   Saint-Venant torsion. Properties follow geometry/material updates, while
   explicit calibration overrides persist until cleared; see
   [Helicoidal](../api/systems/gvs/helicoidal.md) and
-  [PR #229](https://github.com/tud-phi/soromox/pull/229).
+  [PR #229](https://github.com/phi-lab-research/soromox/pull/229).
 - Hollow circular and rectangular GVS links through `LinkSpec`'s optional
   `wall_thickness`, with constant or linear profiles. Shared section geometry
   drives inertia, stiffness, damping, and cavity surfaces in Open3D and Viser;
@@ -34,9 +59,11 @@ Describe the delta from the last release, not intermediate development changes.
   and `TorsionRodModel` choices. Effective shear uses
   material-dependent Cowper factors for circles and Jourawski shear energy for
   rectangles. Saint-Venant torsion uses Marshall for rectangular solids/tubes
-  and exact formulas for circles, annuli, and solid ellipses. Defaults preserve
-  the released uniform shear and polar-moment torsion for solids; hollow links
-  require effective shear and Saint-Venant torsion. Paper configurations select
+  and exact formulas for circles, annuli, and solid ellipses. Differentiable
+  Warp kernels support these laws and their projection through GVS strain bases.
+  Defaults preserve the released uniform shear and polar-moment torsion for
+  solids; hollow links require effective shear and Saint-Venant torsion. Paper
+  configurations select
   the released models explicitly. See
   [rod constitutive laws](../api/systems/continuum-components.md#rod-constitutive-laws).
 - Python 3.15 support, with numerical tests and patched Open3D source-build
@@ -44,10 +71,14 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Changed
 
+- `ActuationSpaceDynamics` now uses the actuator-coordinate Jacobian for its
+  coordinate map and explicitly transforms potentially lossy actuation matrices.
+
 - Shared PCS/GVS dynamics support full sectional and tip inertia in JAX and Warp;
-  see [PR #229](https://github.com/tud-phi/soromox/pull/229).
+  see [PR #229](https://github.com/phi-lab-research/soromox/pull/229).
 - Refreshed the numerical and rendering dependency lock for Python 3.15,
-  including compatible Viser and `rpds-py` releases.
+  including compatible Viser, `rpds-py`, Matplotlib, `msgspec`, Numba, and
+  llvmlite releases.
 
 ### Performance
 
@@ -55,6 +86,17 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Breaking changes
 
+- Replaced `Transmission.moment_matrix(...)` with `coordinate_jacobian(...)`
+  and `actuation_matrix(...)`, and added `SoftRobot.actuator_coordinate_jacobian(...)`.
+  The matrices are transposes for ideal transmissions; lossy transmissions may
+  differ. No compatibility alias is retained.
+
+- Renamed direct GVS Warp kernels and launchers to `homogeneous_*_kernel`
+  and `launch_homogeneous_*`; homogeneous kernels take the shared `*Data`
+  structs, while host launchers retain array arguments. Integration callers
+  must use the explicit names and updated kernel signatures.
+  See the [batch layout contracts](../api/execution/warp/gvs.md#batch-layouts-and-naming)
+  and [PR #227](https://github.com/phi-lab-research/soromox/pull/227).
 - `SoftRobot.cross_section_geometry(q, s)` now returns
   `(geometry, outer_dimensions, inner_dimensions)` instead of a pair.
   Update custom implementations to return `None` as the third value for solid
@@ -79,11 +121,19 @@ Describe the delta from the last release, not intermediate development changes.
   this convention.
 - Restored the Section IVa PyElastica benchmarks using COOMM, with
   PyElastica 1.0 support and short rollout tests in CI; see
-  [PR #220](https://github.com/tud-phi/soromox/pull/220).
+  [PR #220](https://github.com/phi-lab-research/soromox/pull/220).
 - Recognized the current patched Open3D 0.20 `.soromox3` build in the macOS
   rendering guard, allowing image/video export and modern windows.
 
 ### Documentation
+
+- Added a [configuration-dependent routing guide](../api/actuation/threadlike.md#configuration-dependent-routing)
+  covering the common actuator APIs, explicit solutions, and a hollow-tendon
+  example with static equilibrium, dynamic simulation, and rendering of resolved
+  paths through guides at segment transitions.
+
+- Documented the continuum Capstan derivation, actuator-coordinate scales,
+  local length-gradient notation, and distinction from discrete spacer disks.
 
 - Updated the [sequential CPU rollout results](../research.md#sequential-cpu-rollouts)
   to match the latest paper version, reporting up to 27.0× speedup over SoRoSim for
@@ -96,7 +146,7 @@ Describe the delta from the last release, not intermediate development changes.
 
 This release introduces shared renderer configuration and studio scenes, upgrades
 Open3D support, and adds UMArm operational-space tracking. Renderer API and default
-changes are listed below; see the [full changes since v0.4.1](https://github.com/tud-phi/soromox/compare/v0.4.1...v0.5.0).
+changes are listed below; see the [full changes since v0.4.1](https://github.com/phi-lab-research/soromox/compare/v0.4.1...v0.5.0).
 
 ### Added
 
@@ -106,15 +156,15 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   and tilted scenes. Mount options now include beveled disks, truncated cones
   and flared collars; `GroundPlaneConfig(height_reference="base_mounting_face")`
   aligns scenery with the mounting face. See
-  [PR #210](https://github.com/tud-phi/soromox/pull/210) and
-  [PR #212](https://github.com/tud-phi/soromox/pull/212).
+  [PR #210](https://github.com/phi-lab-research/soromox/pull/210) and
+  [PR #212](https://github.com/phi-lab-research/soromox/pull/212).
 - A UMArm operational-space circle-tracking example using
   `OperationalSpaceImpedanceControlTracker` and balanced antagonistic pressures,
   extending the joint-space tracking examples available in v0.4.1; see
-  [PR #211](https://github.com/tud-phi/soromox/pull/211).
+  [PR #211](https://github.com/phi-lab-research/soromox/pull/211).
 - A reproducible Figure 13 assembler for the safety-control and reinforcement
   learning studies, exporting PDF, SVG and PNG with a source-hash manifest; see
-  the [paper reproduction instructions](https://github.com/tud-phi/soromox/blob/v0.5.0/paper_results/README.md).
+  the [paper reproduction instructions](https://github.com/phi-lab-research/soromox/blob/v0.5.0/paper_results/README.md).
 
 ### Changed
 
@@ -124,8 +174,8 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   grading, selectable linear/ACES tone mapping and a fix for uninitialized mesh
   texture coordinates. Plain `pip install soromox[rendering]` uses PyPI packages;
   see the [installation guide](../installation.md),
-  [PR #213](https://github.com/tud-phi/soromox/pull/213) and
-  [PR #214](https://github.com/tud-phi/soromox/pull/214).
+  [PR #213](https://github.com/phi-lab-research/soromox/pull/213) and
+  [PR #214](https://github.com/phi-lab-research/soromox/pull/214).
 - Open3D static `show()` now uses the modern renderer, matching image exports.
   Interactive animation retains the legacy renderer with matching camera
   projection and warnings about appearance differences. Simulation and control
@@ -134,7 +184,7 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
 - Refreshed Section V videos, snapshots and website media with studio styling.
   Figures 11 and 13 improve trajectory visibility, reference-surface contrast,
   legend labels and transparent backgrounds; see
-  [PR #212](https://github.com/tud-phi/soromox/pull/212).
+  [PR #212](https://github.com/phi-lab-research/soromox/pull/212).
 - Section Vf policy rollouts now default to 20 seconds instead of 7; the step
   count derives from duration and control FPS unless `--n-steps` is supplied.
 
@@ -204,13 +254,13 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
 
 - Thanks to [@Johannap1](https://github.com/Johannap1) for identifying unused
   ground-plane code, native window-creation failures and Open3D segment seams in
-  [PR #210](https://github.com/tud-phi/soromox/pull/210).
+  [PR #210](https://github.com/phi-lab-research/soromox/pull/210).
 - Thanks to [@zuorunze](https://github.com/zuorunze) for reviewing the UMArm
   pressure-coordinate formulation and validating the tracking example in
-  [PR #211](https://github.com/tud-phi/soromox/pull/211).
+  [PR #211](https://github.com/phi-lab-research/soromox/pull/211).
 - Thanks to [@vdperfetta01](https://github.com/vdperfetta01) for suggestions that
   improved trajectory visibility, reference surfaces and figure legends in
-  [PR #212](https://github.com/tud-phi/soromox/pull/212).
+  [PR #212](https://github.com/phi-lab-research/soromox/pull/212).
 
 ## [0.4.1] - 2026-09-06
 
@@ -220,25 +270,25 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   integrator for `SoftRobot` rollouts that supports unequal floating-base
   configuration and velocity dimensions, manifold retraction, and trailing
   auxiliary state; see the [Simulation Integrators](../api/simulation/integrators.md)
-  guide and [PR #201](https://github.com/tud-phi/soromox/pull/201).
+  guide and [PR #201](https://github.com/phi-lab-research/soromox/pull/201).
 - Added reproducible six-start Section Vd control-gain optimization results,
   with a shared dimensionless objective, tuned settings, schema-v3 archives,
-  and regression coverage; see [PR #204](https://github.com/tud-phi/soromox/pull/204)
-  and [issue #154](https://github.com/tud-phi/soromox/issues/154).
+  and regression coverage; see [PR #204](https://github.com/phi-lab-research/soromox/pull/204)
+  and [issue #154](https://github.com/phi-lab-research/soromox/issues/154).
 - Added a dynamic UMArm joint-space tracking example with
   `FeedforwardCompensationTracker`, balanced antagonistic pressure offsets,
   tracking plots, and pressure-colored Viser recording; see
-  [PR #207](https://github.com/tud-phi/soromox/pull/207).
+  [PR #207](https://github.com/phi-lab-research/soromox/pull/207).
 - Added the generic signed direct `AffineGeneralizedCoordinateActuator`, with
   affine generalized-coordinate routing and metadata-only input bounds; see
-  [PR #187](https://github.com/tud-phi/soromox/pull/187).
+  [PR #187](https://github.com/phi-lab-research/soromox/pull/187).
 - Added affine-curvature GVS examples for the R-SIP, force-actuated Soft
   Cart-Pole, Soft Pendubot, and Soft Furuta Pendulum, including semantic
   upright/hanging configurations, open-loop simulations, summary plots, and
-  Viser rendering; see [PR #187](https://github.com/tud-phi/soromox/pull/187).
+  Viser rendering; see [PR #187](https://github.com/phi-lab-research/soromox/pull/187).
 - Added renderer-neutral cross-section contours and loft construction, with a
   registration hook for extending both swept 3D renderers with new geometries;
-  see [PR #200](https://github.com/tud-phi/soromox/pull/200).
+  see [PR #200](https://github.com/phi-lab-research/soromox/pull/200).
 
 ### Changed
 
@@ -251,13 +301,13 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   shared gravity-down camera.
 - Unified fixed- and floating-base gravity with shared analytical point-mass
   quadrature, avoiding runtime autodiff and full spatial gravity contractions;
-  see [PR #209](https://github.com/tud-phi/soromox/pull/209).
+  see [PR #209](https://github.com/phi-lab-research/soromox/pull/209).
 - Standardized example mounting declarations with named poses and conventional
   world-down gravity, and aligned Section Vf rendering with zero gravity; see
-  [PR #208](https://github.com/tud-phi/soromox/pull/208).
+  [PR #208](https://github.com/phi-lab-research/soromox/pull/208).
 - Open3D and Viser swept backbones now preserve circular, elliptical, and
   rectangular cross-sections, including dimensions that vary with abscissa;
-  see [PR #200](https://github.com/tud-phi/soromox/pull/200).
+  see [PR #200](https://github.com/phi-lab-research/soromox/pull/200).
 
 ### Performance
 
@@ -266,8 +316,8 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   for GVS; relative to batch size 1, GVS throughput reaches 679.7× for one
   segment and 133.6× for 32 segments at batch size 1,024. The 32-segment case
   peaks at batch size 512 and is 1.2% lower at 1,024; see the [benchmark
-  protocol](https://github.com/tud-phi/soromox/blob/v0.4.1/paper_results/secIVb_parallel_rollouts_gpu/README.md) and
-  [PR #205](https://github.com/tud-phi/soromox/pull/205).
+  protocol](https://github.com/phi-lab-research/soromox/blob/v0.4.1/paper_results/secIVb_parallel_rollouts_gpu/README.md) and
+  [PR #205](https://github.com/phi-lab-research/soromox/pull/205).
 
 ### Breaking changes
 
@@ -277,28 +327,28 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   routing offsets or actuator directions.
 - Renamed the Viser `cylinder_sections` and Open3D `tube_resolution` options to
   the geometry-neutral `cross_section_resolution`; see
-  [PR #200](https://github.com/tud-phi/soromox/pull/200).
+  [PR #200](https://github.com/phi-lab-research/soromox/pull/200).
 - Renamed `AffineJointTransmission` and `AffineJointTransmissionParams` to
   `AffineGeneralizedCoordinateTransmission` and
   `AffineGeneralizedCoordinateTransmissionParams` to reflect support for
   rigid-joint, continuum, and hybrid generalized coordinates; see
-  [PR #187](https://github.com/tud-phi/soromox/pull/187).
+  [PR #187](https://github.com/phi-lab-research/soromox/pull/187).
 
 ### Fixed
 
 - Fixed analytical gravitational forces for rotated mounts in
   `ArticulatedSoftRobot` and `PlanarHSA`; see
-  [PR #209](https://github.com/tud-phi/soromox/pull/209).
+  [PR #209](https://github.com/phi-lab-research/soromox/pull/209).
 - Set Viser scenes to +Z-up while preserving explicit camera-up selections; see
-  [PR #208](https://github.com/tud-phi/soromox/pull/208).
+  [PR #208](https://github.com/phi-lab-research/soromox/pull/208).
 - Corrected the Section Ve camera and render artifacts so +Z gravity appears
-  downward; see [PR #208](https://github.com/tud-phi/soromox/pull/208).
+  downward; see [PR #208](https://github.com/phi-lab-research/soromox/pull/208).
 - Fixed `DynamicalSystem` API documentation to avoid assuming second-order
   `[q, qd]` states or configuration-only projection; see
-  [PR #206](https://github.com/tud-phi/soromox/pull/206).
+  [PR #206](https://github.com/phi-lab-research/soromox/pull/206).
 - Fixed Viser discrete cross-section markers to match Open3D: circular,
   rectangular, and elliptical sections now use spheres, boxes, and ellipsoids,
-  respectively; see [PR #200](https://github.com/tud-phi/soromox/pull/200).
+  respectively; see [PR #200](https://github.com/phi-lab-research/soromox/pull/200).
 - Fixed Open3D and Viser lofting across link boundaries, which produced a short
   shape-morphing funnel when adjacent links used different cross-sections.
 - Fixed Open3D swept meshes reusing the first endpoint cross-section at both
@@ -310,7 +360,7 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
   including solver compatibility and floating-base integration caveats.
 - Documented the low-dimensional soft-pendulum coordinate, actuation, material,
   and rigid-body-assumption conventions; see
-  [PR #187](https://github.com/tud-phi/soromox/pull/187).
+  [PR #187](https://github.com/phi-lab-research/soromox/pull/187).
 
 ## [0.4.0] - 2026-09-01
 
@@ -465,17 +515,17 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
 
 - Thanks to [@vdperfetta01](https://github.com/vdperfetta01) for sustained
   review of the GVS optimization, execution-backend, floating-base, and API
-  changes in [PR #174](https://github.com/tud-phi/soromox/pull/174),
-  [#177](https://github.com/tud-phi/soromox/pull/177),
-  [#181](https://github.com/tud-phi/soromox/pull/181),
-  [#183](https://github.com/tud-phi/soromox/pull/183),
-  [#184](https://github.com/tud-phi/soromox/pull/184),
-  [#185](https://github.com/tud-phi/soromox/pull/185), and
-  [#186](https://github.com/tud-phi/soromox/pull/186), including identifying a
+  changes in [PR #174](https://github.com/phi-lab-research/soromox/pull/174),
+  [#177](https://github.com/phi-lab-research/soromox/pull/177),
+  [#181](https://github.com/phi-lab-research/soromox/pull/181),
+  [#183](https://github.com/phi-lab-research/soromox/pull/183),
+  [#184](https://github.com/phi-lab-research/soromox/pull/184),
+  [#185](https://github.com/phi-lab-research/soromox/pull/185), and
+  [#186](https://github.com/phi-lab-research/soromox/pull/186), including identifying a
   test failure before merge.
 - Thanks to [@mohammedtarnini](https://github.com/mohammedtarnini) and
   [@Johannap1](https://github.com/Johannap1) for reviewing the GVS assembly
-  optimization in [PR #174](https://github.com/tud-phi/soromox/pull/174).
+  optimization in [PR #174](https://github.com/phi-lab-research/soromox/pull/174).
 
 ## [0.3.0] - 2026-08-25
 
@@ -524,12 +574,12 @@ changes are listed below; see the [full changes since v0.4.1](https://github.com
 ### Contributors
 
 - Thanks to [@matteodv99tn](https://github.com/matteodv99tn) for his
-  contributions to [PR #156](https://github.com/tud-phi/soromox/pull/156).
+  contributions to [PR #156](https://github.com/phi-lab-research/soromox/pull/156).
 - Thanks to [@ivrolan](https://github.com/ivrolan) for his contributions to
-  [PR #162](https://github.com/tud-phi/soromox/pull/162).
+  [PR #162](https://github.com/phi-lab-research/soromox/pull/162).
 - Thanks to [@mohammedtarnini](https://github.com/mohammedtarnini) for his
   suggesting the improvement implemented in
-  [PR #166](https://github.com/tud-phi/soromox/pull/166).
+  [PR #166](https://github.com/phi-lab-research/soromox/pull/166).
 
 ## [0.2.3] - 2026-08-19
 

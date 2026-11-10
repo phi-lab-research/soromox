@@ -7,7 +7,7 @@ kept in `code/`, `data/`, and `outputs/`, respectively.
 The paper reports three-second rollouts on an Intel Core Ultra 7 165H CPU with
 16 GB RAM. SoRoSim uses adaptive `ode45`; SoRoMoX uses `Tsit5` and PyElastica
 uses `PositionVerlet`, both with a fixed 0.1 ms step. See
-[Paper & Results](https://tud-phi.github.io/soromox/research/#sequential-cpu-rollouts)
+[Paper & Results](https://phi-lab-research.github.io/soromox/research/#sequential-cpu-rollouts)
 for the reported runtimes and trajectory agreement.
 
 Install the paper dependencies from the repository root:
