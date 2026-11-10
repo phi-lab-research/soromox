@@ -14,6 +14,30 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Added
 
+### Changed
+
+### Performance
+
+### Deprecated
+
+### Breaking changes
+
+### Fixed
+
+### Documentation
+
+### Contributors
+
+## [0.6.0] - 2026-11-10
+
+This release adds configuration-dependent tendon routing, continuum Capstan
+friction, helicoidal robots, hollow GVS links, and configurable rod constitutive
+laws. It also expands Warp execution and shared rendering, and supports Python
+3.15. API migration notes are listed below; see the
+[full changes since v0.5.0](https://github.com/phi-lab-research/soromox/compare/v0.5.0...v0.6.0).
+
+### Added
+
 - Shared rendering of installed and standalone fixed, free-space, and implicit
   threadlike paths in Matplotlib, Open3D, Viser (including Helicoidal), and planar
   OpenCV, with reuse of routing solutions for frames, batches, and playback. The
@@ -80,10 +104,6 @@ Describe the delta from the last release, not intermediate development changes.
   including compatible Viser, `rpds-py`, Matplotlib, `msgspec`, Numba, and
   llvmlite releases.
 
-### Performance
-
-### Deprecated
-
 ### Breaking changes
 
 - Replaced `Transmission.moment_matrix(...)` with `coordinate_jacobian(...)`
@@ -109,6 +129,10 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Fixed
 
+- Corrected the optional Viser dependency error message; see
+  [PR #237](https://github.com/phi-lab-research/soromox/pull/237).
+- Fixed patched Open3D compilation with GCC 15 in Ubuntu CI; see
+  [PR #255](https://github.com/phi-lab-research/soromox/pull/255).
 - Viser live mode initializes the camera and lighting on its first state and
   rebuilds static meshes as editable surfaces when switching from a static
   view, so subsequent geometry updates reach the browser. Resizing a live
@@ -127,6 +151,10 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Documentation
 
+- Updated parallel reinforcement-learning training scripts, results, and paper
+  plots, including a CPU JAX comparison; see
+  [PR #250](https://github.com/phi-lab-research/soromox/pull/250) and
+  [PR #251](https://github.com/phi-lab-research/soromox/pull/251).
 - Added a [configuration-dependent routing guide](../api/actuation/threadlike.md#configuration-dependent-routing)
   covering the common actuator APIs, explicit solutions, and a hollow-tendon
   example with static equilibrium, dynamic simulation, and rendering of resolved
@@ -141,6 +169,27 @@ Describe the delta from the last release, not intermediate development changes.
   and tip-position agreement.
 
 ### Contributors
+
+- @Danielfeliutalegon restored PyElastica benchmarks
+  ([#220](https://github.com/phi-lab-research/soromox/pull/220)) and reviewed the
+  Capstan formulation and rod constitutive guidance
+  ([#203](https://github.com/phi-lab-research/soromox/pull/203),
+  [#234](https://github.com/phi-lab-research/soromox/pull/234)).
+- @iansun19 contributed shared strand geometry and cavity rendering
+  ([#231](https://github.com/phi-lab-research/soromox/pull/231)) and checked
+  helicoidal routing visualization and actuator integration
+  ([#244](https://github.com/phi-lab-research/soromox/pull/244),
+  [#248](https://github.com/phi-lab-research/soromox/pull/248)).
+- @ivrolan corrected the Viser dependency error message
+  ([#237](https://github.com/phi-lab-research/soromox/pull/237)).
+- @Hhannzch updated reinforcement-learning training and paper results
+  ([#250](https://github.com/phi-lab-research/soromox/pull/250),
+  [#251](https://github.com/phi-lab-research/soromox/pull/251)) and reviewed
+  the Warp inertia changes
+  ([#245](https://github.com/phi-lab-research/soromox/pull/245)).
+- @anupteejo reviewed the routing formulation and highlighted discretization
+  convergence considerations
+  ([#238](https://github.com/phi-lab-research/soromox/pull/238)).
 
 ## [0.5.0] - 2026-09-18
 
