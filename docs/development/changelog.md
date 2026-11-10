@@ -57,7 +57,7 @@ laws. It also expands Warp execution and shared rendering, and supports Python
 
 - Added optional continuum Capstan friction for active threadlike actuation in
   PCS, PlanarPCS, and GVS, with analytical routed-path turn and custom friction
-  laws; see [threadlike actuation](../api/actuation/threadlike.md#continuum-capstan-friction).
+  laws; see [threadlike actuation](https://phi-lab-research.github.io/soromox/api/actuation/threadlike/#continuum-capstan-friction).
 
 - Native Warp GVS kernels for heterogeneous worlds, with FP64 dynamics,
   kinematics and actuation across different joints and strain bases; see
@@ -71,14 +71,14 @@ laws. It also expands Warp execution and shared rendering, and supports Python
   use the shared `RodConstitutiveLaw`, defaulting to effective shear areas and
   Saint-Venant torsion. Properties follow geometry/material updates, while
   explicit calibration overrides persist until cleared; see
-  [Helicoidal](../api/systems/gvs/helicoidal.md) and
+  [Helicoidal](https://phi-lab-research.github.io/soromox/api/systems/gvs/helicoidal/) and
   [PR #229](https://github.com/phi-lab-research/soromox/pull/229).
 - Hollow circular and rectangular GVS links through `LinkSpec`'s optional
   `wall_thickness`, with constant or linear profiles. Shared section geometry
   drives inertia, stiffness, damping, and cavity surfaces in Open3D and Viser;
   discrete markers remain outer proxies. Hollow links require an explicit
   constitutive law supporting their geometry. See
-  [continuum components](../api/systems/continuum-components.md).
+  [continuum components](https://phi-lab-research.github.io/soromox/api/systems/continuum-components/).
 - Configurable GVS `RodConstitutiveLaw` with independent `TransverseShearRodModel`
   and `TorsionRodModel` choices. Effective shear uses
   material-dependent Cowper factors for circles and Jourawski shear energy for
@@ -89,7 +89,7 @@ laws. It also expands Warp execution and shared rendering, and supports Python
   solids; hollow links require effective shear and Saint-Venant torsion. Paper
   configurations select
   the released models explicitly. See
-  [rod constitutive laws](../api/systems/continuum-components.md#rod-constitutive-laws).
+  [rod constitutive laws](https://phi-lab-research.github.io/soromox/api/systems/continuum-components/#rod-constitutive-laws).
 - Python 3.15 support, with numerical tests and patched Open3D source-build
   and rendering checks in Ubuntu CI.
 
@@ -115,7 +115,7 @@ laws. It also expands Warp execution and shared rendering, and supports Python
   and `launch_homogeneous_*`; homogeneous kernels take the shared `*Data`
   structs, while host launchers retain array arguments. Integration callers
   must use the explicit names and updated kernel signatures.
-  See the [batch layout contracts](../api/execution/warp/gvs.md#batch-layouts-and-naming)
+  See the [batch layout contracts](https://phi-lab-research.github.io/soromox/api/execution/warp/gvs/#batch-layouts-and-naming)
   and [PR #227](https://github.com/phi-lab-research/soromox/pull/227).
 - `SoftRobot.cross_section_geometry(q, s)` now returns
   `(geometry, outer_dimensions, inner_dimensions)` instead of a pair.
@@ -155,7 +155,7 @@ laws. It also expands Warp execution and shared rendering, and supports Python
   plots, including a CPU JAX comparison; see
   [PR #250](https://github.com/phi-lab-research/soromox/pull/250) and
   [PR #251](https://github.com/phi-lab-research/soromox/pull/251).
-- Added a [configuration-dependent routing guide](../api/actuation/threadlike.md#configuration-dependent-routing)
+- Added a [configuration-dependent routing guide](https://phi-lab-research.github.io/soromox/api/actuation/threadlike/#configuration-dependent-routing)
   covering the common actuator APIs, explicit solutions, and a hollow-tendon
   example with static equilibrium, dynamic simulation, and rendering of resolved
   paths through guides at segment transitions.
@@ -163,7 +163,7 @@ laws. It also expands Warp execution and shared rendering, and supports Python
 - Documented the continuum Capstan derivation, actuator-coordinate scales,
   local length-gradient notation, and distinction from discrete spacer disks.
 
-- Updated the [sequential CPU rollout results](../research.md#sequential-cpu-rollouts)
+- Updated the [sequential CPU rollout results](https://phi-lab-research.github.io/soromox/research/#sequential-cpu-rollouts)
   to match the latest paper version, reporting up to 27.0× speedup over SoRoSim for
   three-second rollouts on an Intel Core Ultra 7 165H CPU, with solver context
   and tip-position agreement.
