@@ -156,7 +156,7 @@ and rerunning the tag workflow over manually uploading distributions to PyPI.
 - Python 3.11 or newer with the development, documentation, build, and Twine
   tools installed
 - a clean Git checkout with the expected `origin` remote
-- GitHub Actions enabled for `tud-phi/soromox`
+- GitHub Actions enabled for `phi-lab-research/soromox`
 - a protected `pypi` environment and PyPI trusted publisher configured for
   `.github/workflows/release.yml`
 - a changelog following [Keep a Changelog](https://keepachangelog.com/)

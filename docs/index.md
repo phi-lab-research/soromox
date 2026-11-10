@@ -13,7 +13,7 @@ energies, Jacobians and derivatives, and forward dynamics.
 !!! info "Successor to JSRM"
 
     SoRoMoX succeeds
-    [JSRM](https://github.com/tud-phi/jax-soft-robot-modeling). It replaces
+    [JSRM](https://github.com/phi-lab-research/jsrm). It replaces
     symbolic derivations with scalable numerical implementations and extends
     the architecture to articulated, PCS, and GVS model families with common
     control and rendering interfaces.
@@ -140,4 +140,4 @@ reporting the exact software version.
 ## License
 
 SoRoMoX is distributed under the
-[MIT License](https://github.com/tud-phi/soromox/blob/main/LICENSE.txt).
+[MIT License](https://github.com/phi-lab-research/soromox/blob/main/LICENSE.txt).
