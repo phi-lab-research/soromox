@@ -34,19 +34,6 @@ unmerged release branch.
 
 5. Review the managed-file diff and run the release checks:
 
-   On macOS, when Open3D and PyTorch are installed together, select PyTorch's
-   OpenMP runtime before starting pytest to avoid a duplicate-runtime import
-   crash. After syncing the required extras, run:
-
-   ```bash
-   soromox_torch_lib="$(uv run --no-sync python -c 'from importlib.util import find_spec; from pathlib import Path; print(Path(find_spec("torch").origin).parent / "lib")')"
-   DYLD_LIBRARY_PATH="$soromox_torch_lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
-     uv run --no-sync python -m pytest
-   ```
-
-   See [macOS OpenMP runtimes](third_party/open3d/README.md#macos-openmp-runtimes)
-   for background. On other platforms, use the pytest command below.
-
    ```bash
    uv run --extra test pytest
    uv run --extra docs zensical build --clean
