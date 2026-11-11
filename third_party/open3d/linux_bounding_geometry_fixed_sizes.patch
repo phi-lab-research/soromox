@@ -1,0 +1,31 @@
+--- a/cpp/open3d/t/geometry/kernel/MinimumOBB.cpp
++++ b/cpp/open3d/t/geometry/kernel/MinimumOBB.cpp
+@@ -1297,7 +1297,7 @@
+         Eigen::Matrix3d m_rot;
+         m_rot << u[0], v[0], w[0], u[1], v[1], w[1], u[2], v[2], w[2];
+         auto rot_inv =
+-                core::eigen_converter::EigenMatrixToTensor(m_rot.inverse());
++                core::eigen_converter::EigenMatrixToTensor(m_rot.inverse().eval());
+         auto center =
+                 core::eigen_converter::EigenMatrixToTensor(a).Reshape({3});
+         hull_pcd.Rotate(rot_inv, center);
+--- a/cpp/open3d/t/geometry/kernel/MinimumOBE.cpp
++++ b/cpp/open3d/t/geometry/kernel/MinimumOBE.cpp
+@@ -110,7 +110,7 @@
+                           int maxiter,
+                           int numVertices,
+                           Eigen::MatrixXd& Q,
+-                          Eigen::VectorXd& c) {
++                          Eigen::Vector3d& c) {
+     // Initialize uniform weights: p_i = 1/N for all i
+     Eigen::VectorXd p = Eigen::VectorXd::Constant(
+             numVertices, 1.0 / static_cast<double>(numVertices));
+@@ -240,7 +240,7 @@
+ 
+     // Variables to store the resulting ellipsoid parameters
+     Eigen::MatrixXd Q;
+-    Eigen::VectorXd c;
++    Eigen::Vector3d c;
+ 
+     // Call Khachiyan's algorithm to compute Q (shape matrix) and c (center)
+     KhachiyanAlgorithm(A, eps, maxiter, num_vertices, Q, c);

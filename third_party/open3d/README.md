@@ -17,6 +17,9 @@ The Linux raycasting patch gives Eigen the known six-row size of the pinhole
 ray buffer. This avoids GCC 15's array-bounds diagnostic for a vectorized
 assignment from a six-element vector to a dynamically sized column, while
 keeping compiler warnings treated as errors.
+The bounding-geometry patch similarly evaluates the box rotation inverse at its
+known 3-by-3 size and retains the ellipsoid center as a three-element vector.
+This avoids GCC 15's AVX array-bounds diagnostics during dynamic-size conversions.
 
 ## Ubuntu installation
 
@@ -216,6 +219,9 @@ The Linux patches serve the following purposes:
   as `open3d`.
 - `linux_static_curl.patch` groups the bundled curl and BoringSSL archives for
   linking.
+- `linux_raycasting_fixed_rows.patch` preserves the six-row ray buffer size.
+- `linux_bounding_geometry_fixed_sizes.patch` preserves fixed-size Eigen
+  expressions in the bounding-box and bounding-ellipsoid kernels.
 
 Upstream tracking:
 

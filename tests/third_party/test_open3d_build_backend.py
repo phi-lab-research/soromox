@@ -187,3 +187,40 @@ def test_pinhole_rays_preserve_origin_and_direction(width: int, height: int) -> 
     expected[..., 4] = (y + 0.5 - 0.75) / 4.0
     expected[..., 5] = 1.0
     np.testing.assert_allclose(rays, expected, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_bounding_geometry_preserves_transformed_cuboid(dtype: str) -> None:
+    """Check the fixed-size box inverse and ellipsoid center on known geometry."""
+    from itertools import product
+
+    np = pytest.importorskip("numpy")
+    o3d = pytest.importorskip("open3d")
+    half_extents = np.array([0.5, 1.0, 2.0])
+    angle = 0.37
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    center = np.array([1.25, -0.75, 2.5])
+    vertices = np.array(list(product([-1.0, 1.0], repeat=3))) * half_extents
+    points = o3d.core.Tensor((vertices @ rotation.T + center).astype(dtype))
+    box = o3d.t.geometry.OrientedBoundingBox.create_from_points(
+        points, method=o3d.t.geometry.MethodOBBCreate.MINIMAL_APPROX
+    )
+    ellipsoid = o3d.t.geometry.OrientedBoundingEllipsoid.create_from_points(points)
+
+    np.testing.assert_allclose(box.center.numpy(), center, atol=2e-5)
+    np.testing.assert_allclose(
+        np.sort(box.extent.numpy()), 2 * half_extents, rtol=2e-5, atol=2e-5
+    )
+    np.testing.assert_allclose(ellipsoid.center.numpy(), center, atol=2e-5)
+    np.testing.assert_allclose(
+        np.sort(ellipsoid.radii.numpy()),
+        np.sqrt(3) * half_extents,
+        rtol=2e-5,
+        atol=2e-5,
+    )
