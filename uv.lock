@@ -4309,7 +4309,6 @@ all = [
     { name = "cbfpy" },
     { name = "check-manifest" },
     { name = "codecov" },
-    { name = "coomm" },
     { name = "coverage", extra = ["toml"] },
     { name = "gymnasium" },
     { name = "ipython" },
@@ -4384,7 +4383,6 @@ examples = [
 ]
 paper-results = [
     { name = "cbfpy" },
-    { name = "coomm" },
     { name = "gymnasium" },
     { name = "ipython" },
     { name = "ipywidgets" },
@@ -4440,6 +4438,11 @@ warp = [
     { name = "warp-lang" },
 ]
 
+[package.dev-dependencies]
+paper-benchmarks = [
+    { name = "coomm" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "bump2version", marker = "extra == 'all'" },
@@ -4452,8 +4455,6 @@ requires-dist = [
     { name = "codecov", marker = "extra == 'all'" },
     { name = "codecov", marker = "extra == 'dev'" },
     { name = "codecov", marker = "extra == 'test'" },
-    { name = "coomm", marker = "extra == 'all'", git = "https://github.com/mstoelzle/COOMM.git?rev=0df454a44e70be941941be3c6b521b1cd891aef3" },
-    { name = "coomm", marker = "extra == 'paper-results'", git = "https://github.com/mstoelzle/COOMM.git?rev=0df454a44e70be941941be3c6b521b1cd891aef3" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'all'" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'test'" },
@@ -4562,6 +4563,9 @@ requires-dist = [
     { name = "zensical", marker = "extra == 'docs'" },
 ]
 provides-extras = ["cuda13", "warp", "dev", "docs", "examples", "paper-results", "rendering", "rl", "test", "all"]
+
+[package.metadata.requires-dev]
+paper-benchmarks = [{ name = "coomm", git = "https://github.com/mstoelzle/COOMM.git?rev=0df454a44e70be941941be3c6b521b1cd891aef3" }]
 
 [[package]]
 name = "stable-baselines3"
