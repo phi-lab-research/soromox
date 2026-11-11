@@ -32,10 +32,6 @@ uv run ruff check src tests examples
 uv run --extra docs zensical build --clean
 ```
 
-On macOS, if importing Open3D and PyTorch together causes `OMP: Error #15`,
-follow the [OpenMP runtime setup](third_party/open3d/README.md#macos-openmp-runtimes)
-before running tests.
-
 See the [detailed contributor guide](docs/development/contributing.md) for code
 style, tests and coverage, documentation authoring, extension points, and the
 pull-request process.
