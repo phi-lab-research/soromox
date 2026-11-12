@@ -53,6 +53,19 @@ are 0, 0.75, 2, 7.9 seconds and 0, 5, 10, 15 seconds, respectively. Videos must
 already exist and FFmpeg must be installed. Regenerate the section videos first
 when changing rendering settings. The script does not rerun simulations or training.
 
+## PyElastica benchmark dependency
+
+The Section IVa PyElastica benchmarks also require the pinned COOMM fork, which
+is installed from the repository's `paper-benchmarks` dependency group:
+
+```bash
+uv sync --extra paper_results --group paper-benchmarks
+```
+
+With pip 25.1 or newer, run `python -m pip install -e ".[paper_results]" --group paper-benchmarks`
+from the repository root. The published `paper_results` and `all` extras contain
+registry dependencies; the COOMM fork is installed separately for these benchmarks.
+
 ## Shared conventions
 
 The standardized Matplotlib plotters use the base publication settings in

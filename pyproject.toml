@@ -174,7 +174,6 @@ examples = [
     "viser",
 ]
 paper_results = [
-    "coomm @ git+https://github.com/mstoelzle/COOMM.git@0df454a44e70be941941be3c6b521b1cd891aef3",
     "cbfpy",
     "gymnasium",
     "ipython",
@@ -225,7 +224,6 @@ test = [
     "warp-lang>=1.16.0",
 ]
 all = [
-    "coomm @ git+https://github.com/mstoelzle/COOMM.git@0df454a44e70be941941be3c6b521b1cd891aef3",
     "bump2version",
     "cbfpy",
     "check-manifest",
@@ -318,6 +316,12 @@ ignore = [
   "tools/**",
   "third_party/**",
   "uv.lock",
+]
+
+[dependency-groups]
+# Repository-only benchmark dependency; PyPI rejects direct URLs in Requires-Dist.
+paper-benchmarks = [
+    "coomm @ git+https://github.com/mstoelzle/COOMM.git@0df454a44e70be941941be3c6b521b1cd891aef3",
 ]
 
 [build-system]

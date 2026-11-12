@@ -13,14 +13,14 @@ for the reported runtimes and trajectory agreement.
 Install the paper dependencies from the repository root:
 
 ```bash
-uv sync --extra paper_results
+uv sync --extra paper_results --group paper-benchmarks
 ```
 
 Generate the SoRoMoX data:
 
 ```bash
 for script in paper_results/secIVa_benchmarking_sequential_cpu/code/soromox/*.py; do
-  JAX_PLATFORMS=cpu uv run python "$script"
+  JAX_PLATFORMS=cpu uv run --extra paper_results --group paper-benchmarks python "$script"
 done
 ```
 
@@ -28,7 +28,7 @@ Generate the PyElastica data:
 
 ```bash
 for script in paper_results/secIVa_benchmarking_sequential_cpu/code/pyelastica/simulate_*_pyelastica.py; do
-  uv run python "$script"
+  uv run --extra paper_results --group paper-benchmarks python "$script"
 done
 ```
 
@@ -61,11 +61,11 @@ constant stored tendon area.
 Run the short rollout tests with:
 
 ```bash
-uv sync --extra test --extra paper_results
-MPLBACKEND=Agg uv run python -m pytest -q tests/paper_results/secIVa/test_simulate_pyelastica.py
+uv sync --extra test --extra paper_results --group paper-benchmarks
+MPLBACKEND=Agg uv run --extra test --extra paper_results --group paper-benchmarks python -m pytest -q tests/paper_results/secIVa/test_simulate_pyelastica.py
 ```
 
-COOMM installs automatically from the Git revision pinned in
+The `paper-benchmarks` group installs COOMM from the Git revision pinned in
 [`pyproject.toml`](../../pyproject.toml), which contains the compatibility fixes
 from [upstream PR #11](https://github.com/hanson-hschang/COOMM/pull/11).
 
