@@ -1,5 +1,5 @@
 # Section V-F figure environment: the summary figure and both RTX renderers, on
-# newton-cosserat upstream main with a Newton 1.6 stack. Experiments run in env_newton17/.
+# newton-cosserat upstream main with a Newton 1.6 stack. Experiments run in env/.
 # Run from this folder:
 #   uv run --project . python code/rendering.py ...
 [project]

@@ -4,7 +4,7 @@
 2x2 grid, lettered A-D: A) RTX renders of the sample cloud across iCEM iterations,
 B) the MPPI-vs-iCEM planning-time/performance trade-off, C) RTX renders of the
 Franka-mounted tentacle pushing along the trajectory, D) the top-down square-push
-trajectories, iCEM vs MPPI K=800 over three seeds each, overlaid.
+trajectories, MPPI K=800 vs iCEM over three seeds each, overlaid.
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ from smpc import SMPCParams, push_cost
 RESULTS_DIR = CASE_DIR / "data"
 FRAMES_DIR = CASE_DIR / "outputs" / "frames"
 OUTPUT_DIR = CASE_DIR / "outputs"
-OUTPUT_FILENAME = "smpc_summary"
+OUTPUT_FILENAME = "sampling_based_mpc"
+FINAL_OUTPUT_DIR = CASE_DIR.parent / "final_outputs"
 TRADEOFF_RESULTS_DIRS = [RESULTS_DIR / "cmp_seeds" / f"seed{i}" for i in range(3)]
 
 # Copies of run_experiment.py's values: importing it would pull in newton_cosserat just to plot.
@@ -48,11 +49,11 @@ TABLE_TOP_Z = 0.0
 CONTACT_SEGMENT_INDEX = 2
 
 TRAJECTORY_RUNS = [
+    (f"square_mppi_k800_white_seed{i}.npz", f"MPPI, seed {i}", c)
+    for i, c in enumerate([COLORS["pre_opt_1"], COLORS["pre_opt_2"], "#023E5C"])
+] + [
     (f"square_icem_seed{i}.npz", f"iCEM, seed {i}", c)
     for i, c in enumerate([COLORS["post_opt_1"], COLORS["post_opt_2"], COLORS["post_opt_3"]])
-] + [
-    (f"square_mppi_k800_white_seed{i}.npz", f"MPPI K=800, seed {i}", c)
-    for i, c in enumerate([COLORS["pre_opt_1"], COLORS["pre_opt_2"], "#023E5C"])
 ]
 
 ITERATION_IMAGES = [FRAMES_DIR / f"square_icem_seed0_t0_iter{i}.png" for i in range(3)]
@@ -70,7 +71,7 @@ RENDER_FRAMES_PER_STEP = 10
 WIDTH_RATIOS = [1.0, 1.0]
 HEIGHT_RATIOS = [0.78, 0.72]
 PANEL_WSPACE = 0.26
-PANEL_HSPACE = 0.36
+PANEL_HSPACE = 0.16
 
 
 @dataclasses.dataclass(frozen=True)
@@ -297,7 +298,7 @@ def plot_push_trajectory_xy(trajectories: list[tuple[str, np.ndarray, str]], goa
     ax.yaxis.grid(True)
     ax.spines["top"].set_visible(True)
     ax.spines["right"].set_visible(True)
-    ax.legend(loc="center right", fontsize=5.5, handlelength=1.2, borderaxespad=0.3, frameon=True)
+    ax.legend(loc="center right", borderaxespad=0.3, frameon=True)
 
 
 def scene_bbox(image: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -439,7 +440,7 @@ def main() -> int:
     tradeoff_points = load_seed_mean_points(TRADEOFF_RESULTS_DIRS, build_params(robot))
 
     fig = plot_smpc_summary(trajectories, goal_xy, tradeoff_points, ITERATION_IMAGES, TRAJECTORY_IMAGES)
-    save_figure(fig, OUTPUT_DIR, OUTPUT_FILENAME)
+    save_figure(fig, FINAL_OUTPUT_DIR, OUTPUT_FILENAME)
     return 0
 
 

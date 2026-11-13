@@ -17,18 +17,18 @@ figures. Run every command from this directory:
 
 ```bash
 cd paper_results/secVf_sampling_based_mpc
-uv sync --project env_newton17   # experiments
+uv sync --project env   # experiments
 uv sync --project .              # renderers and summary figure
 ```
 
 Both projects use this checkout's SoRoMoX through `override-dependencies`.
 
-The experiment project, [`env_newton17/pyproject.toml`](env_newton17/pyproject.toml),
+The experiment project, [`env/pyproject.toml`](env/pyproject.toml),
 pins the stack the paper data was generated on:
 
 | Package | Version |
 | --- | --- |
-| `newton-cosserat` | [`Johannap1/newton-cosserat`](https://github.com/Johannap1/newton-cosserat) branch `secVg-sampling-based-mpc` (Newton 1.7 port) |
+| `newton-cosserat` | [`phi-lab-research/newton-cosserat`](https://github.com/phi-lab-research/newton-cosserat) `main` (Newton 1.7) |
 | `newton` | `1.7.0` |
 | `warp-lang` | `1.18.0` |
 | `jax` | `0.11.1` |
@@ -53,7 +53,7 @@ Both renderers need an RTX GPU. On a machine without a GPU, set
 Run one closed-loop push with `code/run_experiment.py`:
 
 ```bash
-uv run --project env_newton17 python code/run_experiment.py --device cuda:0 \
+uv run --project env python code/run_experiment.py --device cuda:0 \
   --stop-after-one-square --object-shape box --k-samples 200 100 50 --num-iters 3 --seed 0 \
   --save-path /tmp/soromox-secVf/square_icem_seed0.npz
 ```
@@ -65,7 +65,7 @@ files are large.
 Regenerate the complete paper data set:
 
 ```bash
-DEVICE=cuda:0 code/run_paper.sh
+DEVICE=cuda:0 code/generate_paper_results.sh
 ```
 
 The script runs three parts, each over seeds 0, 1 and 2:
@@ -87,6 +87,53 @@ The script replaces same-named files in `data/`. Set `RESULTS_DIR` to stage a
 run elsewhere. Of the committed runs, only `data/square_icem_seed0.npz` keeps
 the per-sample arrays; it is stored in Git LFS (`git lfs pull` fetches it).
 
+## Key numbers
+
+The tables below summarize the committed runs. Recompute them with:
+
+```bash
+uv run --project . python code/summarize_runs.py
+```
+
+A run succeeds when it reaches every goal (all four square corners, or the
+single comparison goal) under the online reach test of `run_experiment.py`:
+the object passes within 10 % of the leg length of the goal. The final error is
+the distance from the object's last (x, y) position to the last active goal.
+The time per MPC step is the wall-clock planning time of one replan, rollouts
+included, averaged over steps 1 onward to skip the JIT warm-up of step 0.
+Values are mean ± standard deviation over seeds 0, 1 and 2; the 100 g box and
+cylinder runs use seed 0 only. Square pushes stop after the last corner or
+after 100 MPC steps.
+
+Square push:
+
+| Configuration | Success | Final error [mm] | Time per MPC step [s] | MPC steps |
+| --- | --- | --- | --- | --- |
+| iCEM, box | 3/3 | 8.0 ± 1.3 | 26.54 ± 0.20 | 51 |
+| MPPI K = 800, box | 1/3 | 15.9 ± 9.3 | 8.50 ± 0.84 | 85 |
+| iCEM, 100 g box | 0/1 | 10.1 | 29.42 | 100 |
+| iCEM, cylinder | 1/1 | 5.6 | 25.58 | 53 |
+
+The failed MPPI seeds 1 and 2 reach only the first corner; the 100 g box
+reaches three of four corners within 100 steps.
+
+Planner comparison (20 steps toward the single goal):
+
+| Configuration              | Success | Final error [mm] | Time per MPC step [s] |
+| -------------------------- | ------- | ---------------- | --------------------- |
+| MPPI K = 200               | 2/3     | 11.8 ± 7.6       | 8.39 ± 0.75           |
+| MPPI K = 400               | 1/3     | 13.0 ± 4.9       | 8.72 ± 1.11           |
+| MPPI K = 800               | 3/3     | 5.9 ± 0.8        | 12.93 ± 1.48          |
+| MPPI K = 1600              | 3/3     | 3.6 ± 0.6        | 29.53 ± 0.70          |
+| iCEM K = 200, 1 iteration  | 2/3     | 34.4 ± 46.4      | 8.31 ± 0.49           |
+| iCEM K = 200, 2 iterations | 3/3     | 6.5 ± 1.6        | 19.32 ± 0.64          |
+| iCEM K = 200, 3 iterations | 3/3     | 8.0 ± 1.5        | 31.62 ± 0.79          |
+| iCEM K = 200, 4 iterations | 3/3     | 4.1 ± 0.4        | 44.82 ± 0.21          |
+| iCEM 3 iterations, K = 50  | 3/3     | 4.2 ± 1.2        | 19.02 ± 0.55          |
+| iCEM 3 iterations, K = 100 | 3/3     | 5.9 ± 1.2        | 23.07 ± 0.70          |
+| iCEM 3 iterations, K = 200 | 3/3     | 8.0 ± 1.5        | 30.86 ± 0.58          |
+| iCEM 3 iterations, K = 400 | 3/3     | 5.8 ± 2.4        | 41.05 ± 1.54          |
+
 ## Paper artifacts
 
 Recreate the summary figure from the committed data and renders:
@@ -95,7 +142,7 @@ Recreate the summary figure from the committed data and renders:
 uv run --project . python code/plot_smpc_summary.py
 ```
 
-This writes `outputs/smpc_summary.pdf`. Panel A shows RTX renders of the sample
+This writes `../final_outputs/sampling_based_mpc.pdf`. Panel A shows RTX renders of the sample
 cloud across iCEM iterations, B the MPPI-versus-iCEM planning-time and
 performance trade-off, C RTX renders of the Franka-mounted arm pushing along the
 trajectory, and D the top-down square-push trajectories of iCEM and MPPI
