@@ -1,11 +1,11 @@
 # Section V-F experiment environment: Newton 1.7.0 and warp 1.18.0, the stack the 3-11 paper
-# batch ran on, with newton-cosserat upstream main plus only its Newton 1.7 port. Experiments
+# batch ran on, with phi-lab-research/newton-cosserat main (Newton 1.7 native). Experiments
 # only; the renderers and summary figure stay on the Newton 1.6 environment one folder up,
 # since ovrtx 0.5 (required by Newton 1.7's RTX viewer) renders the sample clouds black.
 # Run from the folder above:
-#   uv run --project env_newton17 python code/run_experiment.py ...
+#   uv run --project env python code/run_experiment.py ...
 [project]
-name = "secvf-sampling-based-mpc-newton17"
+name = "soromox-secvf-sampling-based-mpc"
 version = "0.0.0"
 requires-python = ">=3.12,<3.14"
 dependencies = ["soromox[cuda13]", "newton[sim]==1.7.0", "newton-cosserat", "scipy"]
@@ -22,6 +22,6 @@ url = "https://pypi.nvidia.com/"
 explicit = true
 
 [tool.uv.sources]
-newton-cosserat = { git = "https://github.com/Johannap1/newton-cosserat.git", branch = "secVg-sampling-based-mpc" }
+newton-cosserat = { git = "https://github.com/phi-lab-research/newton-cosserat.git", branch = "main" }
 soromox = { path = "../../..", editable = true }
 warp-lang = { index = "nvidia" }

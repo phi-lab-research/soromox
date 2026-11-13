@@ -443,7 +443,7 @@ sim = [
 [[package]]
 name = "newton-cosserat"
 version = "0.1.0.dev0"
-source = { git = "https://github.com/Johannap1/newton-cosserat.git?branch=secVg-sampling-based-mpc#bafd18a174ce3fd2012dd280a63f122661b099ff" }
+source = { git = "https://github.com/phi-lab-research/newton-cosserat.git?branch=main#8ac49ac9bdd5f411b1ed1a277d4979550c52501c" }
 dependencies = [
     { name = "jax" },
     { name = "newton" },
@@ -745,25 +745,6 @@ wheels = [
 ]
 
 [[package]]
-name = "secvf-sampling-based-mpc-newton17"
-version = "0.0.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "newton", extra = ["sim"] },
-    { name = "newton-cosserat" },
-    { name = "scipy" },
-    { name = "soromox", extra = ["cuda13"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "newton", extras = ["sim"], specifier = "==1.7.0" },
-    { name = "newton-cosserat", git = "https://github.com/Johannap1/newton-cosserat.git?branch=secVg-sampling-based-mpc" },
-    { name = "scipy" },
-    { name = "soromox", extras = ["cuda13"], editable = "../../../" },
-]
-
-[[package]]
 name = "setuptools"
 version = "84.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -934,6 +915,25 @@ requires-dist = [
     { name = "zensical", marker = "extra == 'docs'" },
 ]
 provides-extras = ["cuda13", "warp", "dev", "docs", "examples", "paper-results", "rendering", "rl", "test", "all"]
+
+[[package]]
+name = "soromox-secvf-sampling-based-mpc"
+version = "0.0.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "newton", extra = ["sim"] },
+    { name = "newton-cosserat" },
+    { name = "scipy" },
+    { name = "soromox", extra = ["cuda13"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "newton", extras = ["sim"], specifier = "==1.7.0" },
+    { name = "newton-cosserat", git = "https://github.com/phi-lab-research/newton-cosserat.git?branch=main" },
+    { name = "scipy" },
+    { name = "soromox", extras = ["cuda13"], editable = "../../../" },
+]
 
 [[package]]
 name = "sympy"
