@@ -36,6 +36,8 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Breaking changes
 
+- Removed the obsolete anonymized submission archive generator and its tests.
+
 ### Fixed
 
 ### Documentation
