@@ -86,8 +86,12 @@ Homebrew OpenBLAS.
 ## Windows installation
 
 Install Visual Studio 2022 with the Desktop development with C++ workload,
-CMake, Git, Python and FFmpeg. Then build the rendering environment from the
-SoRoMoX checkout:
+CMake, Git, Python, FFmpeg, and
+[glslang](https://github.com/KhronosGroup/glslang/releases/tag/16.6.0).
+Add the glslang `bin` directory to `PATH`. Open3D 0.20 searches for
+`glslangValidator.exe`; if the release provides `glslang.exe`, copy it to
+`glslangValidator.exe` in the same directory. Then build the rendering
+environment from the SoRoMoX checkout:
 
 ```powershell
 uv sync --extra rendering
