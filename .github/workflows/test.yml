@@ -1,6 +1,3 @@
-# this file is *not* meant to cover or endorse the use of GitHub Actions, but rather to
-# help test this project
-
 name: Test
 
 on:
@@ -11,6 +8,16 @@ on:
   pull_request:
     branches:
       - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MPLBACKEND: Agg
 
 jobs:
   rendering-ubuntu:
@@ -37,8 +44,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          lfs: true
 
       - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v6
@@ -112,8 +117,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          lfs: true
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -139,19 +142,20 @@ jobs:
           python -m pytest -q tests/rendering/test_renderer_config.py::test_open3d_converts_point_flux_and_applies_exposure_without_mutating tests/rendering/test_routing_visuals.py::test_open3d_scene_reuses_trajectory_solutions tests/rendering/test_routing_visuals.py::test_standalone_fixed_open3d_trajectory
 
   test:
+    name: test (Python ${{ matrix.python }}, ${{ matrix.dependencies }} dependencies)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     strategy:
       fail-fast: false
       matrix:
         python: ['3.11', '3.12', '3.13', '3.14', '3.15']
-        # platform: [ubuntu-latest, macos-latest, windows-latest]
-        platform: [ubuntu-latest]
-    runs-on: ${{ matrix.platform }}
+        dependencies: [latest]
+        include:
+          - python: '3.11'
+            dependencies: minimum
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          lfs: true
 
       - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v6
@@ -159,87 +163,23 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
-      - name: Install graphics and video runtimes
+      - name: Install OpenCV runtime libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libegl1 libgl1
+          sudo apt-get install -y libegl1 libgl1
+
+      - name: Select minimum numerical dependencies
+        if: matrix.dependencies == 'minimum'
+        run: echo "PIP_CONSTRAINT=$GITHUB_WORKSPACE/tests/constraints/minimum-numerical.txt" >> "$GITHUB_ENV"
 
       - name: Install project with test extras
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
-
-      - name: Run non-system tests
-        run: python -m pytest --ignore=tests/systems -m "not memory_intensive"
-
-      - name: Run remaining system tests
-        run: |
-          python -m pytest tests/systems \
-            --ignore=tests/systems/test_gvs.py \
-            --ignore=tests/systems/test_pcs.py \
-            --ignore=tests/systems/test_planar_pcs.py \
-            -m "not memory_intensive"
-
-      - name: Run GVS system tests
-        run: |
-          # Bound the JAX/XLA executable memory retained by each Python process.
-          mapfile -t gvs_tests < <(
-            python -m pytest tests/systems/test_gvs.py \
-              -m "not memory_intensive" \
-              --collect-only -q | sed -n '/^tests\/systems\/test_gvs.py::/p'
-          )
-          if (( ${#gvs_tests[@]} == 0 )); then
-            echo "No GVS tests were collected." >&2
-            exit 1
-          fi
-          for ((start = 0; start < ${#gvs_tests[@]}; start += 20)); do
-            python -m pytest "${gvs_tests[@]:start:20}"
-          done
-
-      - name: Run PCS system tests
-        run: python -m pytest tests/systems/test_pcs.py -m "not memory_intensive"
-
-      - name: Run PlanarPCS system tests
-        run: python -m pytest tests/systems/test_planar_pcs.py -m "not memory_intensive"
-
-      - name: Run memory-intensive GVS tests
-        run: |
-          python -m pytest tests/systems/test_gvs.py::test_forward_mode_automatic_differentiability_at_zero_configuration
-          python -m pytest tests/systems/test_gvs.py::test_reverse_mode_automatic_differentiability_at_zero_configuration
-          python -m pytest tests/systems/test_gvs.py::test_gvs_autodiff_checks
-          for basis_type in monomial legendre chebyshev fourier gaussian imq; do
-            python -m pytest "tests/systems/test_gvs.py::test_scaled_rotational_basis_batched_partial_cells_match_scalar_paths[$basis_type]"
-          done
-
-  minimum-numerical-dependencies:
-    name: test (minimum numerical dependencies, Python 3.11)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    env:
-      PIP_CONSTRAINT: ${{ github.workspace }}/tests/constraints/minimum-numerical.txt
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          lfs: true
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Install graphics and video runtimes
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libegl1 libgl1
-
-      - name: Install project with minimum numerical dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[test]"
+          python -m pip check
 
       - name: Verify minimum dependency versions
+        if: matrix.dependencies == 'minimum'
         run: |
           python - <<'PY'
           import os
@@ -252,7 +192,6 @@ jobs:
                   actual = version(package)
                   assert actual == expected, f"{package}: expected {expected}, found {actual}"
           PY
-          python -m pip check
 
       - name: Run non-system tests
         run: python -m pytest --ignore=tests/systems -m "not memory_intensive"

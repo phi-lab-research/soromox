@@ -190,7 +190,6 @@ rl = [
     "stable-baselines3",
 ]
 test = [
-    "cbfpy",
     "codecov",
     "coverage[toml]",
     "matplotlib",
@@ -207,7 +206,6 @@ test = [
 ]
 all = [
     "bump2version",
-    "cbfpy",
     "check-manifest",
     "codecov",
     "coverage[toml]",

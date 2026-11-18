@@ -16,6 +16,11 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Changed
 
+- Simplified library CI after the paper experiment migration: combined current
+  and minimum dependency runs in one matrix, removed test-job LFS downloads
+  and unnecessary FFmpeg installs, and dropped the unused `cbfpy` dependency.
+  Superseded test workflow runs are cancelled automatically.
+
 - Moved paper experiments, datasets, checkpoints, figures, and their tests to
   [soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments). The new repository pins SoRoMoX 0.6.0
   and retains the experiment history and artifact provenance. Library and
