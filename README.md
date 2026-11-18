@@ -33,11 +33,6 @@ implementations. The accompanying paper benchmarks the numerical stack and
 uses six application case studies to demonstrate differentiability,
 parallelization, and the control-oriented model interface.
 
-> **Note:** SoRoMoX succeeds
-> [JSRM](https://github.com/phi-lab-research/jsrm), replacing symbolic
-> derivations with scalable numerical implementations and extending the model
-> families and common interfaces.
-
 ## Reproduce the paper
 
 The **[SoRoMoX paper experiments](https://github.com/phi-lab-research/soromox-paper-experiments)** repository contains the experiment

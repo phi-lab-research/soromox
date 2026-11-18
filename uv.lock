@@ -4112,7 +4112,7 @@ requires-dist = [
     { name = "zensical", marker = "extra == 'all'" },
     { name = "zensical", marker = "extra == 'docs'" },
 ]
-provides-extras = ["cuda13", "warp", "dev", "docs", "examples", "paper-results", "rendering", "rl", "test", "all"]
+provides-extras = ["cuda13", "warp", "dev", "docs", "examples", "rendering", "rl", "test", "all"]
 
 [[package]]
 name = "stable-baselines3"
