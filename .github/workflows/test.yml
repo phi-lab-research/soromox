@@ -124,6 +124,21 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      - name: Install glslang shader compiler
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'glslang.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'glslang'
+          Invoke-WebRequest 'https://github.com/KhronosGroup/glslang/releases/download/16.6.0/glslang-16.6.0-windows-x86_64-release.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '82bf434e69b9bb4829de7e2b4bc2c5e7a7861e53d66cf75e5cc70f5f694a8d9b') {
+            throw 'glslang archive checksum mismatch'
+          }
+          Expand-Archive $archive -DestinationPath $destination
+          $bin = Join-Path $destination 'bin'
+          # Open3D 0.20 searches for the former executable name.
+          Copy-Item (Join-Path $bin 'glslang.exe') (Join-Path $bin 'glslangValidator.exe')
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Restore native Open3D build cache
         uses: actions/cache@v5
         with:
@@ -131,12 +146,14 @@ jobs:
           key: rendering-windows-open3d-py312-${{ hashFiles('third_party/open3d/**') }}
 
       - name: Build patched Open3D 0.20 and install rendering tests
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install ./third_party/open3d
           python -m pip install -e ".[rendering,test]"
 
       - name: Verify patched Open3D package
+        shell: bash
         run: |
           python -c "import open3d as o3d; assert o3d.__version__.endswith('.soromox3'), o3d.__version__"
           python -m pytest -q tests/rendering/test_renderer_config.py::test_open3d_converts_point_flux_and_applies_exposure_without_mutating tests/rendering/test_routing_visuals.py::test_open3d_scene_reuses_trajectory_solutions tests/rendering/test_routing_visuals.py::test_standalone_fixed_open3d_trajectory
