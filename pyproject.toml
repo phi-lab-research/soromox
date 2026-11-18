@@ -173,8 +173,6 @@ examples = [
     "trimesh",
     "viser",
 ]
-# Deprecated compatibility alias; use the separate soromox-paper-experiments environment.
-paper_results = []
 rendering = [
     "matplotlib",
     "open3d>=0.20",
@@ -190,7 +188,6 @@ rl = [
     "stable-baselines3",
 ]
 test = [
-    "cbfpy",
     "codecov",
     "coverage[toml]",
     "matplotlib",
@@ -207,7 +204,6 @@ test = [
 ]
 all = [
     "bump2version",
-    "cbfpy",
     "check-manifest",
     "codecov",
     "coverage[toml]",

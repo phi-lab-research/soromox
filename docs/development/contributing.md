@@ -60,6 +60,13 @@ Paper figure tests run in [soromox-paper-experiments](https://github.com/phi-lab
 Library rendering integration tests require the graphics and video dependencies
 described in the rendering documentation.
 
+CI runs the library suite on Python 3.11–3.15 with current dependencies and
+adds a Python 3.11 run with the minimum numerical versions. These runs share
+one test sequence, including separate processes for the large GVS checks.
+Native Open3D jobs cover Ubuntu x86-64/ARM64 and Windows; FFmpeg is installed
+in the Ubuntu native jobs for video-export checks. Test jobs do not download
+Git LFS media. The documentation workflow fetches its own media separately.
+
 ```bash
 # Run all tests
 pytest

@@ -1,12 +1,13 @@
-# Paper experiments moved
+# Paper experiments
 
-The experiment code, datasets, checkpoints, figures, and reproduction tests now
-live in **[phi-lab-research/soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments)**.
+The **[SoRoMoX paper experiments](https://github.com/phi-lab-research/soromox-paper-experiments)**
+repository provides the experiment code, datasets, checkpoints, figures, and
+reproduction tests for the paper.
 
-Start with the [experiment index](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/README.md)
+Start with its [experiment index](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/README.md)
 and [setup instructions](https://github.com/phi-lab-research/soromox-paper-experiments#setup).
-The new repository installs a pinned SoRoMoX release and retains the relevant
-file history, source revisions, and checksums of the canonical paper artifacts.
+The experiments use a pinned SoRoMoX release and include checksums for the
+canonical data and outputs.
 
 ```bash
 git clone https://github.com/phi-lab-research/soromox-paper-experiments.git
@@ -14,8 +15,3 @@ cd soromox-paper-experiments
 git lfs pull
 uv sync --locked --group test --group paper-benchmarks
 ```
-
-Historical SoRoMoX tags and commits still contain the original experiment files.
-The migration source was [b4856ec7](https://github.com/phi-lab-research/soromox/tree/b4856ec7c4ca5c6509255945f004aa7516bbe114/paper_results).
-The old `soromox[paper_results]` extra is deprecated and now an empty compatibility
-alias; install the experiment repository's environment instead.

@@ -124,24 +124,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cbfpy"
-version = "0.0.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jax", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "jax", version = "0.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "jaxlib", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "jaxlib", version = "0.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "qpax" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/38/45/a8cfa4345ae589cf3f74d537166348286a1a5477ba07cde67577f738ae81/cbfpy-0.0.4.tar.gz", hash = "sha256:9f02607659f0b922a68068124174209312a014c84e0c896abe9393942f7ccc9f", size = 36947, upload-time = "2026-02-05T21:16:12.295Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6f/50/27cb0d8d7de1815bb219e4260410622ffb982f37ff03a2e40e70a18f796b/cbfpy-0.0.4-py3-none-any.whl", hash = "sha256:1ed4e01eccfad1043c9476909610295e93b8bc83951e925481e4e891bd56a63b", size = 47429, upload-time = "2026-02-05T21:16:09.269Z" },
-]
-
-[[package]]
 name = "certifi"
 version = "2026.10.18"
 source = { registry = "https://pypi.org/simple" }
@@ -3429,21 +3411,6 @@ wheels = [
 ]
 
 [[package]]
-name = "qpax"
-version = "0.1.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jax", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "jax", version = "0.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "jaxlib", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "jaxlib", version = "0.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8d/34/a20ad7ea0c32490714b4adff988992a90a6030fc6ed278a0119cc3888da7/qpax-0.1.3.tar.gz", hash = "sha256:4b36396d3898dbf2593b689a601201a8418056de703f155b801da35846b83a4f", size = 33147, upload-time = "2026-05-26T13:07:32.939Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/da/a2e1d779664685fc70833fd0b4c5691dec0dd5b07379e0f9057c7705c8cf/qpax-0.1.3-py3-none-any.whl", hash = "sha256:c9aa32a4824e30e239eb02ab8c180698c21ef2d9251269ad67379fc423a49802", size = 36073, upload-time = "2026-05-26T13:07:31.998Z" },
-]
-
-[[package]]
 name = "readme-renderer"
 version = "45.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3945,7 +3912,6 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "bump2version" },
-    { name = "cbfpy" },
     { name = "check-manifest" },
     { name = "codecov" },
     { name = "coverage", extra = ["toml"] },
@@ -4033,7 +3999,6 @@ rl = [
     { name = "stable-baselines3" },
 ]
 test = [
-    { name = "cbfpy" },
     { name = "codecov" },
     { name = "coverage", extra = ["toml"] },
     { name = "matplotlib" },
@@ -4056,8 +4021,6 @@ warp = [
 requires-dist = [
     { name = "bump2version", marker = "extra == 'all'" },
     { name = "bump2version", marker = "extra == 'dev'" },
-    { name = "cbfpy", marker = "extra == 'all'" },
-    { name = "cbfpy", marker = "extra == 'test'" },
     { name = "check-manifest", marker = "extra == 'all'" },
     { name = "check-manifest", marker = "extra == 'dev'" },
     { name = "codecov", marker = "extra == 'all'" },
@@ -4149,7 +4112,7 @@ requires-dist = [
     { name = "zensical", marker = "extra == 'all'" },
     { name = "zensical", marker = "extra == 'docs'" },
 ]
-provides-extras = ["cuda13", "warp", "dev", "docs", "examples", "paper-results", "rendering", "rl", "test", "all"]
+provides-extras = ["cuda13", "warp", "dev", "docs", "examples", "rendering", "rl", "test", "all"]
 
 [[package]]
 name = "stable-baselines3"

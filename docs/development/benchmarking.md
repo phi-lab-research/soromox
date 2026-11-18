@@ -115,9 +115,8 @@ for tracking ABA performance against the controller-facing dense dynamics API.
 
 `benchmark_model_based_control.py` measures the checked-out implementation of
 the computed-torque and configuration-/actuation-space feedforward terms, plus
-the operational-space dynamics terms used by operational controllers. The
-benchmark intentionally contains no legacy strategy switch: compare revisions
-by running the same command in separate clean worktrees.
+the operational-space dynamics terms used by operational controllers. Compare
+revisions by running the same command in separate clean worktrees.
 
 ```bash
 python tools/benchmarks/benchmark_model_based_control.py \
@@ -157,7 +156,7 @@ main speedup ratios by system and case.
 
 ## Benchmarking parallel rollouts
 
-The Section IVb generator and publication plotter have moved to
+The Section IVb generator and publication plotter are available in
 [the parallel-rollout experiment](https://github.com/phi-lab-research/soromox-paper-experiments/tree/main/paper_results/secIVb_parallel_rollouts_gpu).
 Follow its README for environment setup, GPU/CPU selection, batch scaling,
 solver settings, failure reports, and result provenance. Run those commands
@@ -183,7 +182,7 @@ recreates the paper figures from the stored measurements.
 ## Extending the registry
 
 The library development CLIs share `tools/benchmarks/_benchmark_common.py`.
-The paper experiments preserve their own copy for reproducibility. To add a new system:
+To add a new system:
 
 1. Implement a factory that builds the system for a requested segment/link count.
 2. Provide a context builder returning representative `q`, `qd`, `u`, `tau_ext`, and
