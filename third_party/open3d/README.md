@@ -8,6 +8,10 @@ ABI, operating system, and CPU architecture. Other platforms use official PyPI
 or [Open3D v0.20.0 release](https://github.com/isl-org/Open3D/releases/tag/v0.20.0)
 wheels.
 
+Linux and Windows x86-64 wheels include the common ISPC instruction sets and
+select a supported implementation at runtime. Cached wheels can therefore be
+reused across CPUs with different vector instruction support.
+
 `OPEN3D_REVISION` records the exact commit behind the stable tag and makes the
 source build reproducible. Stable release upgrades are deliberate changes that
 also update `BASE_VERSION`, the lock file, patch applicability and native

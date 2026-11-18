@@ -266,6 +266,9 @@ def _build_linux():
     flags = [
         "-DCMAKE_BUILD_TYPE=Release",
         "-DBUILD_SHARED_LIBS=ON",
+        # Cached wheels must dispatch to the current CPU's supported ISA,
+        # rather than requiring the instruction set of the build machine.
+        "-DBUILD_COMMON_ISPC_ISAS=ON",
         "-DBUILD_GUI=ON",
         "-DBUILD_EXAMPLES=OFF",
         "-DBUILD_WEBRTC=OFF",
@@ -345,6 +348,7 @@ def _build_windows():
     flags = [
         "-DBUILD_SHARED_LIBS=ON",
         "-DSTATIC_WINDOWS_RUNTIME=OFF",
+        "-DBUILD_COMMON_ISPC_ISAS=ON",
         "-DBUILD_GUI=ON",
         "-DBUILD_EXAMPLES=OFF",
         "-DBUILD_WEBRTC=OFF",

@@ -29,6 +29,12 @@ jobs:
         include:
           - architecture: x86-64
             runner: ubuntu-latest
+            python: '3.12'
+          - architecture: ARM64
+            runner: ubuntu-24.04-arm
+            python: '3.12'
+          - architecture: x86-64
+            runner: ubuntu-latest
             python: '3.15'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -53,7 +59,7 @@ jobs:
             xorg-dev libxcb-shm0 libglu1-mesa-dev libssl-dev \
             libc++-dev libc++abi-dev libsdl2-dev libxi-dev libtbb-dev \
             libegl1-mesa-dev libudev-dev libusb-1.0-0-dev mesa-vulkan-drivers \
-            autoconf libtool clang gfortran xvfb xauth ffmpeg gdb
+            autoconf libtool clang gfortran xvfb xauth ffmpeg
 
       - name: Select Mesa software Vulkan
         run: |
@@ -74,9 +80,157 @@ jobs:
           python -m pip install ./third_party/open3d
           python -m pip install -e ".[rendering,test]"
 
-      - name: Diagnose native bounding geometry crash
+      - name: Test Open3D configuration and routing
         run: |
-          lscpu
-          gdb --batch -ex run -ex 'thread apply all bt 12' -ex 'x/12i $pc-16' \
-            --args python -m pytest -xvs \
-            tests/third_party/test_open3d_build_backend.py::test_bounding_geometry_preserves_transformed_cuboid
+          python -c "import open3d"
+          python -m pytest -q \
+            tests/third_party/test_open3d_build_backend.py \
+            tests/rendering/test_renderer_config.py::test_open3d_converts_point_flux_and_applies_exposure_without_mutating \
+            tests/rendering/test_routing_visuals.py::test_open3d_scene_reuses_trajectory_solutions \
+            tests/rendering/test_routing_visuals.py::test_standalone_fixed_open3d_trajectory
+
+      - name: Test headless frame and MP4 export
+        run: |
+          env -u DISPLAY \
+            SOROMOX_RUN_RENDERING_INTEGRATION=1 \
+            python -m pytest -q \
+            tests/rendering/test_open3d_linux_integration.py::test_open3d_headless_frame_and_mp4_export \
+            tests/rendering/test_open3d_color_integration.py
+
+      - name: Test interactive viewers under Xvfb
+        run: |
+          xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=true \
+            SOROMOX_RUN_RENDERING_INTEGRATION=1 \
+            python -m pytest -q \
+            tests/rendering/test_open3d_linux_integration.py::test_open3d_show_opens_and_closes_real_xvfb_window \
+            tests/rendering/test_open3d_linux_integration.py::test_open3d_unavailable_display_raises_with_native_log \
+            tests/rendering/test_open3d_linux_integration.py::test_open3d_interactive_sequence_advances_in_real_xvfb_window
+
+  rendering-windows:
+    name: Native rendering build (Windows, Python 3.12)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      SOROMOX_OPEN3D_CACHE: ${{ github.workspace }}/.cache/soromox/open3d
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Restore native Open3D build cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.SOROMOX_OPEN3D_CACHE }}
+          key: rendering-windows-open3d-py312-${{ hashFiles('third_party/open3d/**') }}
+
+      - name: Build patched Open3D 0.20 and install rendering tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./third_party/open3d
+          python -m pip install -e ".[rendering,test]"
+
+      - name: Verify patched Open3D package
+        run: |
+          python -c "import open3d as o3d; assert o3d.__version__.endswith('.soromox3'), o3d.__version__"
+          python -m pytest -q tests/rendering/test_renderer_config.py::test_open3d_converts_point_flux_and_applies_exposure_without_mutating tests/rendering/test_routing_visuals.py::test_open3d_scene_reuses_trajectory_solutions tests/rendering/test_routing_visuals.py::test_standalone_fixed_open3d_trajectory
+
+  test:
+    name: test (Python ${{ matrix.python }}, ${{ matrix.dependencies }} dependencies)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14', '3.15']
+        dependencies: [latest]
+        include:
+          - python: '3.11'
+            dependencies: minimum
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install OpenCV runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1
+
+      - name: Select minimum numerical dependencies
+        if: matrix.dependencies == 'minimum'
+        run: echo "PIP_CONSTRAINT=$GITHUB_WORKSPACE/tests/constraints/minimum-numerical.txt" >> "$GITHUB_ENV"
+
+      - name: Install project with test extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+          python -m pip check
+
+      - name: Verify minimum dependency versions
+        if: matrix.dependencies == 'minimum'
+        run: |
+          python - <<'PY'
+          import os
+          from importlib.metadata import version
+          from pathlib import Path
+
+          for line in Path(os.environ["PIP_CONSTRAINT"]).read_text().splitlines():
+              if line and not line.startswith("#"):
+                  package, expected = line.split("==")
+                  actual = version(package)
+                  assert actual == expected, f"{package}: expected {expected}, found {actual}"
+          PY
+
+      - name: Run non-system tests
+        run: python -m pytest --ignore=tests/systems -m "not memory_intensive"
+
+      - name: Run remaining system tests
+        run: |
+          python -m pytest tests/systems \
+            --ignore=tests/systems/test_gvs.py \
+            --ignore=tests/systems/test_pcs.py \
+            --ignore=tests/systems/test_planar_pcs.py \
+            -m "not memory_intensive"
+
+      - name: Run GVS system tests
+        run: |
+          # Bound the JAX/XLA executable memory retained by each Python process.
+          mapfile -t gvs_tests < <(
+            python -m pytest tests/systems/test_gvs.py \
+              -m "not memory_intensive" \
+              --collect-only -q | sed -n '/^tests\/systems\/test_gvs.py::/p'
+          )
+          if (( ${#gvs_tests[@]} == 0 )); then
+            echo "No GVS tests were collected." >&2
+            exit 1
+          fi
+          for ((start = 0; start < ${#gvs_tests[@]}; start += 20)); do
+            python -m pytest "${gvs_tests[@]:start:20}"
+          done
+
+      - name: Run PCS system tests
+        run: python -m pytest tests/systems/test_pcs.py -m "not memory_intensive"
+
+      - name: Run PlanarPCS system tests
+        run: python -m pytest tests/systems/test_planar_pcs.py -m "not memory_intensive"
+
+      - name: Run memory-intensive GVS tests
+        run: |
+          python -m pytest tests/systems/test_gvs.py::test_forward_mode_automatic_differentiability_at_zero_configuration
+          python -m pytest tests/systems/test_gvs.py::test_reverse_mode_automatic_differentiability_at_zero_configuration
+          python -m pytest tests/systems/test_gvs.py::test_gvs_autodiff_checks
+          for basis_type in monomial legendre chebyshev fourier gaussian imq; do
+            python -m pytest "tests/systems/test_gvs.py::test_scaled_rotational_basis_batched_partial_cells_match_scalar_paths[$basis_type]"
+          done

@@ -70,15 +70,16 @@ def test_prepare_source_creates_override_parent(
     assert calls[0] == ("git", "init", str(source))
 
 
-def test_linux_arm64_build_uses_common_patches(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+def test_linux_build_uses_portable_instructions_and_platform_dependencies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, machine: str
 ) -> None:
     commit = "a" * 40
     calls: list[tuple[str, ...]] = []
     prepared: list[tuple[Path, Path, str, tuple[Path, ...]]] = []
 
     monkeypatch.setattr(backend.sys, "platform", "linux")
-    monkeypatch.setattr(backend.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(backend.platform, "machine", lambda: machine)
     monkeypatch.setattr(backend.shutil, "which", lambda _name: "/usr/bin/cmake")
     monkeypatch.setattr(backend, "_pinned_commit", lambda: commit)
     monkeypatch.setattr(backend, "_recipe_fingerprint", lambda _patches: "recipe")
@@ -97,7 +98,7 @@ def test_linux_arm64_build_uses_common_patches(
             tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
             (
                 wheel_dir
-                / f"open3d-{backend._version()}-{tag}-{tag}-manylinux_aarch64.whl"
+                / f"open3d-{backend._version()}-{tag}-{tag}-manylinux_{machine}.whl"
             ).touch()
 
     monkeypatch.setattr(backend, "_prepare_source", prepare_source)
@@ -105,14 +106,17 @@ def test_linux_arm64_build_uses_common_patches(
 
     wheel = backend._build_linux()
 
-    assert wheel.name.endswith("-manylinux_aarch64.whl")
+    assert wheel.name.endswith(f"-manylinux_{machine}.whl")
     assert prepared[0][2:] == (commit, tuple(backend.LINUX_PATCHES))
-    assert any("ext_openblas" in command for command in calls)
-    assert calls.index(
-        next(command for command in calls if "ext_openblas" in command)
-    ) < calls.index(next(command for command in calls if "pip-package" in command))
+    assert "-DBUILD_COMMON_ISPC_ISAS=ON" in calls[0]
+    openblas_calls = [command for command in calls if "ext_openblas" in command]
+    assert bool(openblas_calls) == (machine == "aarch64")
+    if openblas_calls:
+        assert calls.index(openblas_calls[0]) < calls.index(
+            next(command for command in calls if "pip-package" in command)
+        )
     manifest = json.loads((wheel.parents[3] / "soromox-build.json").read_text())
-    assert manifest["platform"] == "linux-aarch64"
+    assert manifest["platform"] == f"linux-{machine}"
 
 
 def test_windows_build_uses_msvc_release_and_common_patches(
@@ -159,6 +163,7 @@ def test_windows_build_uses_msvc_release_and_common_patches(
         configure[configure.index("-G") + 1],
     ) == ("-G", "Visual Studio 17 2022")
     assert "-DSTATIC_WINDOWS_RUNTIME=OFF" in configure
+    assert "-DBUILD_COMMON_ISPC_ISAS=ON" in configure
     assert "-DOPEN3D_GIT_HASH=aaaaaaa.soromox3" in configure
     assert "--config" in build and build[build.index("--config") + 1] == "Release"
     assert "pip-package" in build
