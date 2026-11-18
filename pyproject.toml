@@ -173,26 +173,8 @@ examples = [
     "trimesh",
     "viser",
 ]
-paper_results = [
-    "cbfpy",
-    "gymnasium",
-    "ipython",
-    "matplotlib",
-    "numpy",
-    "open3d>=0.20",
-    "ipywidgets>=8.0.4",
-    "opencv-python",
-    "openpyxl",
-    "optax",
-    "optimistix",
-    "pandas",
-    "plotly",
-    "pyelastica>=0.3.3.post2,<2",
-    "seaborn",
-    "stable-baselines3",
-    "trimesh",
-    "viser",
-]
+# Deprecated compatibility alias; use the separate soromox-paper-experiments environment.
+paper_results = []
 rendering = [
     "matplotlib",
     "open3d>=0.20",
@@ -229,7 +211,6 @@ all = [
     "check-manifest",
     "codecov",
     "coverage[toml]",
-    "pyelastica>=0.3.3.post2,<2",
     "gymnasium",
     "ipython",
     "matplotlib",
@@ -240,12 +221,9 @@ all = [
     "open3d>=0.20",
     "ipywidgets>=8.0.4",
     "opencv-python",
-    "openpyxl",
     "optimistix",
-    "pandas",
     "plotly",
     "pre-commit",
-    "pyelastica>=0.3.3.post2,<2",
     "pytest",
     "pytest-cov",
     "pytest-html",
@@ -273,6 +251,7 @@ all = [
 "Documentation" = "https://phi-lab-research.github.io/soromox"
 "Changelog" = "https://phi-lab-research.github.io/soromox/development/changelog/"
 "Bug Reports" = "https://github.com/phi-lab-research/soromox/issues"
+"Paper experiments" = "https://github.com/phi-lab-research/soromox-paper-experiments"
 "Paper" = "https://doi.org/10.48550/arXiv.2608.06650"
 "Citation" = "https://phi-lab-research.github.io/soromox/citation/"
 "Source" = "https://github.com/phi-lab-research/soromox"
@@ -316,12 +295,6 @@ ignore = [
   "tools/**",
   "third_party/**",
   "uv.lock",
-]
-
-[dependency-groups]
-# Repository-only benchmark dependency; PyPI rejects direct URLs in Requires-Dist.
-paper-benchmarks = [
-    "coomm @ git+https://github.com/mstoelzle/COOMM.git@0df454a44e70be941941be3c6b521b1cd891aef3",
 ]
 
 [build-system]
@@ -392,7 +365,6 @@ unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = ["E402"]
-"paper_results/**/*.py" = ["E402"]
 "tools/benchmarks/**/*.py" = ["E402"]
 
 [tool.ruff.lint.isort]

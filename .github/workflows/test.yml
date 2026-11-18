@@ -101,19 +101,6 @@ jobs:
             tests/rendering/test_open3d_linux_integration.py::test_open3d_unavailable_display_raises_with_native_log \
             tests/rendering/test_open3d_linux_integration.py::test_open3d_interactive_sequence_advances_in_real_xvfb_window
 
-      # Open3D has no Python 3.15 wheels; reuse the patched source build here.
-      - name: Install Python 3.15 paper-results dependencies
-        if: matrix.python == '3.15'
-        run: |
-          python -m pip install -e ".[paper_results]" --group paper-benchmarks
-          python -m pip check
-
-      - name: Run Python 3.15 paper-results tests
-        if: matrix.python == '3.15'
-        env:
-          MPLBACKEND: Agg
-        run: python -m pytest tests/paper_results -m "not memory_intensive"
-
   rendering-windows:
     name: Native rendering build (Windows, Python 3.12)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -172,7 +159,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
-      - name: Install graphics and video runtimes for paper-results tests
+      - name: Install graphics and video runtimes
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libegl1 libgl1
@@ -183,19 +170,7 @@ jobs:
           python -m pip install -e ".[test]"
 
       - name: Run non-system tests
-        run: python -m pytest --ignore=tests/systems --ignore=tests/paper_results -m "not memory_intensive"
-
-      # Python 3.15 paper-results tests run in rendering-ubuntu, reusing built Open3D.
-      - name: Install paper-results dependencies
-        if: matrix.python != '3.15'
-        run: |
-          python -m pip install -e ".[paper_results]" --group paper-benchmarks
-
-      - name: Run paper-results tests
-        if: matrix.python != '3.15'
-        env:
-          MPLBACKEND: Agg
-        run: python -m pytest tests/paper_results -m "not memory_intensive"
+        run: python -m pytest --ignore=tests/systems -m "not memory_intensive"
 
       - name: Run remaining system tests
         run: |
@@ -254,7 +229,7 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Install graphics and video runtimes for paper-results tests
+      - name: Install graphics and video runtimes
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libegl1 libgl1
@@ -280,16 +255,7 @@ jobs:
           python -m pip check
 
       - name: Run non-system tests
-        run: python -m pytest --ignore=tests/systems --ignore=tests/paper_results -m "not memory_intensive"
-
-      - name: Install paper-results dependencies
-        run: |
-          python -m pip install -e ".[paper_results]" --group paper-benchmarks
-
-      - name: Run paper-results tests
-        env:
-          MPLBACKEND: Agg
-        run: python -m pytest tests/paper_results -m "not memory_intensive"
+        run: python -m pytest --ignore=tests/systems -m "not memory_intensive"
 
       - name: Run remaining system tests
         run: |

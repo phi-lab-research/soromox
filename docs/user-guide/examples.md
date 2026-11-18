@@ -18,7 +18,8 @@ SoRoMoX examples are organized into two main categories:
 - **[Control Examples](#control-examples)** - Control algorithms for different control spaces
 
 Reproducible paper benchmarks, system identification, optimization, and
-application studies are catalogued separately in `paper_results/README.md`.
+application studies are catalogued in the separate
+[paper experiments repository](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/README.md).
 
 ---
 

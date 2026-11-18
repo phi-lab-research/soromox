@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Create a fail-closed, double-anonymous ZIP from a committed Git tree.
 
+Paper experiments are archived separately in soromox-paper-experiments.
+This tool archives only the selected library tree, including historical refs.
+
 The archive is built from ``git archive`` rather than the working tree. This
 means that untracked, ignored, and uncommitted local files are never included.
 Potentially identifying text is rewritten or removed, visual and opaque
@@ -1059,12 +1062,13 @@ def _report(
         "",
         "This ZIP was generated only from files committed to a Git tree.",
         "Untracked, ignored, modified-but-uncommitted files and Git history are absent.",
+        "Experiments now live in soromox-paper-experiments and must be archived separately.",
         "Archive entry timestamps and platform metadata were normalized.",
         "Author/maintainer metadata, affiliations, acknowledgments/funding, lab names,",
         "and identifying links were removed. Bibliographic names may remain in references.",
         "Predecessor-package references and identifying citation requests were removed.",
         "",
-        "The SoRoMoX package logo, favicon, and files under paper_results/ were retained",
+        "The package logo, favicon, and any paper_results/ files present were retained",
         "by explicit policy. Metadata-bearing retained formats were scrubbed; all",
         "retained visuals still require manual review for faces and identifying logos.",
         "",

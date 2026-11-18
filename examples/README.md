@@ -1,7 +1,7 @@
 # Examples
 
 This directory contains small, self-contained demonstrations of SoRoMoX APIs.
-Paper benchmarks and application studies live in [`../paper_results`](../paper_results/README.md),
+Paper benchmarks and application studies live in [soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments),
 where code, input data, and canonical outputs are versioned together.
 
 ## Layout

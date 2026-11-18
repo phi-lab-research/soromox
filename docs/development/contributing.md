@@ -28,8 +28,9 @@ uv sync --extra dev --extra docs --extra examples
 ```
 
 Add task-specific extras when needed: `rendering` for all visualization
-backends, `rl` for reinforcement-learning workflows, and `paper_results` for
-the complete paper reproduction environment.
+backends and `rl` for reinforcement-learning workflows. Paper reproduction
+has its own environment and contributor workflow in
+[soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments).
 
 ### 3. Set Up Pre-commit Hooks
 
@@ -55,8 +56,9 @@ Follow our coding standards:
 
 ### 3. Run Tests
 
-Paper figure tests decode committed videos and require the `ffmpeg` executable
-on `PATH` (for example, `sudo apt-get install ffmpeg` on Ubuntu).
+Paper figure tests run in [soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments).
+Library rendering integration tests require the graphics and video dependencies
+described in the rendering documentation.
 
 ```bash
 # Run all tests

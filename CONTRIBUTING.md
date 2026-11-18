@@ -21,6 +21,9 @@ uv sync --extra dev --extra docs --extra examples
 uv run pre-commit install
 ```
 
+Paper experiments and their tests are maintained in
+[soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments).
+
 ## Validate a change
 
 Run the checks relevant to your change before opening a pull request:

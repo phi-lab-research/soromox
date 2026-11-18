@@ -10,12 +10,12 @@ Soromox ships development benchmarking CLIs under `tools/benchmarks`:
   protected autograd fallbacks, and public APIs with custom JVPs enabled or disabled
   for PlanarPCS, PCS, and GVS systems.
 
-The benchmarks reported in the paper are available in `paper_results/` for
-reproducibility:
+The benchmarks reported in the paper are maintained in
+[soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments):
 
-- [Sequential CPU rollouts (Section IVa)](https://github.com/phi-lab-research/soromox/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
+- [Sequential CPU rollouts (Section IVa)](https://github.com/phi-lab-research/soromox-paper-experiments/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
   compare SoRoMoX, SoRoSim, and PyElastica trajectories.
-- [Batched GPU rollouts (Section IVb)](https://github.com/phi-lab-research/soromox/tree/main/paper_results/secIVb_parallel_rollouts_gpu)
+- [Batched GPU rollouts (Section IVb)](https://github.com/phi-lab-research/soromox-paper-experiments/tree/main/paper_results/secIVb_parallel_rollouts_gpu)
   measure simulation throughput across batch sizes and model sizes.
 
 ## Prerequisites
@@ -157,58 +157,11 @@ main speedup ratios by system and case.
 
 ## Benchmarking parallel rollouts
 
-`generate_parallel_rollout_benchmark.py` runs full simulations in parallel
-batches using `jax.vmap`. GPU execution is the default; use `--device cpu` for
-an explicit CPU run. If the default GPU cannot be initialized, the generator
-warns and exits without silently recording CPU results. It records both the
-per-environment speed
-(`simulated_time / wall_time`) and the aggregate throughput
-(`num_envs * simulated_time / wall_time`), so you can see whether each environment is
-running faster than real-time *and* how many simulated seconds are produced per wall
-second. Each configuration can export tables and plots spanning multiple segment counts.
-
-```bash
-python paper_results/secIVb_parallel_rollouts_gpu/code/generate_parallel_rollout_benchmark.py \
-  --systems articulated_soft_robot pcs planar_pcs \
-  --segment-counts 1 3 5 \
-  --batch-sizes 1 2 4 8 16 32 64 \
-  --duration 2.0 \
-  --solver-dt 5e-4 \
-  --csv /tmp/batch-scaling.csv \
-  --plot /tmp/batch-scaling.png \
-  --log-x --log-y
-```
-
-### Key options
-
-- `--batch-sizes`: number of environments to launch per measurement.
-- `--device`: execution platform (`gpu` by default, or explicit `cpu`).
-- Shared `--systems`, `--segment-counts`, `--duration`, `--solver-dt` (`--dt` alias), `--save-dt`.
-- `--noise-scale`: per-environment perturbation applied to `q`/`qd` to avoid feeding
-  identical states to all replicas (helps stress vectorisation paths).
-- `--repeats`, `--warmup-runs`: control timing stability.
-- `--csv`, `--plot`, `--show-plot`, `--log-x`, `--log-y`: artifact and
-  visualisation controls.
-
-### Output and interpretation
-
-For each combination of system, segment count, and number of environments the script reports:
-
-- Wall-clock time averaged over the requested repeats.
-- Mean simulated time per environment (i.e., the final timestamp returned by
-  `rollout_to`).
-- Per-environment speed ratio `simulated_time / wall_time`, total throughput
-  `number_of_environments * simulated_time / wall_time`, and per-environment wall time. Ratios > 1
-  indicate faster-than-real-time performance.
-- A reproducibility fingerprint containing source revision/dirty state,
-  software versions, FP64 mode, UTC timestamp, and accelerator/runtime
-  identity.
-
-The generator's optional diagnostic plots show two stacked panels per system:
-the top tracks per-environment
-speed-up, while the bottom tracks aggregate throughput (total simulated time per
-wall second). Each line corresponds to a segment count so scaling trends remain
-easy to compare, with the horizontal axis representing the number of environments.
+The Section IVb generator and publication plotter have moved to
+[the parallel-rollout experiment](https://github.com/phi-lab-research/soromox-paper-experiments/tree/main/paper_results/secIVb_parallel_rollouts_gpu).
+Follow its README for environment setup, GPU/CPU selection, batch scaling,
+solver settings, failure reports, and result provenance. Run those commands
+from the experiments repository.
 
 ## Visualising existing runs
 
@@ -224,17 +177,13 @@ python tools/benchmarks/visualize_system_methods_results.py benchmarks/methods.j
 The helper mirrors the plotting style of `benchmark_system_methods.py` and accepts
 optional filters for systems/functions. Pass `--show` to open a window interactively.
 
-For the polished Section IVb publication plots, use:
-
-```bash
-python paper_results/secIVb_parallel_rollouts_gpu/code/plot_parallel_rollout_benchmark.py \
-  --systems articulated_soft_robot planar_pcs pcs gvs \
-  --segment-counts 1 2 4 8 16 32
-```
+The [Section IVb publication plotter](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/secIVb_parallel_rollouts_gpu/README.md)
+recreates the paper figures from the stored measurements.
 
 ## Extending the registry
 
-Both CLIs share `tools/benchmarks/_benchmark_common.py`. To add a new system:
+The library development CLIs share `tools/benchmarks/_benchmark_common.py`.
+The paper experiments preserve their own copy for reproducibility. To add a new system:
 
 1. Implement a factory that builds the system for a requested segment/link count.
 2. Provide a context builder returning representative `q`, `qd`, `u`, `tau_ext`, and

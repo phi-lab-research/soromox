@@ -1,7 +1,0 @@
-# Keep reproducible diagnostics local; explicitly version canonical paper media.
-*
-!.gitignore
-!force_goal_distance_plot.pdf
-!force_goal_distance_plot.png
-!rollout_with_cbf.mp4
-!rollout_without_cbf.mp4

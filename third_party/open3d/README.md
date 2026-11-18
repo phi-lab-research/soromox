@@ -114,13 +114,13 @@ Homebrew OpenBLAS (used by Open3D) and PyTorch can load separate copies of
 `libomp.dylib`, causing `OMP: Error #15` when imported in the same process.
 Launch that process with PyTorch's library directory first in the loader
 search path so both use one runtime. This can affect any Python version.
-For example, from the repository root after syncing the `paper_results` and
+For example, from the repository root after syncing the `rendering` and
 `test` extras:
 
 ```bash
 soromox_torch_lib="$(uv run --no-sync python -c 'from importlib.util import find_spec; from pathlib import Path; print(Path(find_spec("torch").origin).parent / "lib")')"
 DYLD_LIBRARY_PATH="$soromox_torch_lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
-  uv run --no-sync python -m pytest tests/paper_results
+  uv run --no-sync python -m pytest tests/rendering
 ```
 
 ## Validation

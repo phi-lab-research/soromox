@@ -88,7 +88,11 @@ of the following thesis are material to the work, also cite:
 }
 ```
 
-## Citation and License
+## Citation
+
+For paper reproduction, also report the release or commit of
+[soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments) and its pinned SoRoMoX version.
+ and License
 
 The citation guidance above is a scholarly request. SoRoMoX is distributed
 under the MIT License; redistribution requirements are defined by

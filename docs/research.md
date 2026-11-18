@@ -62,7 +62,7 @@ timestamps, without temporal or phase alignment:
 
 These RMSE values correspond to 0.14–1.20% of the 0.6 m beam length. The largest
 instantaneous tip-position difference is 14.14 mm for spatial PCS.
-See the [CPU benchmark reproduction instructions](https://github.com/phi-lab-research/soromox/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
+See the [CPU benchmark reproduction instructions](https://github.com/phi-lab-research/soromox-paper-experiments/tree/main/paper_results/secIVa_benchmarking_sequential_cpu)
 for the simulation scripts, saved trajectories, and plotting command.
 
 ### Batched GPU rollouts
@@ -193,17 +193,20 @@ surface.
 
 ## Reproducing the results
 
-The [`paper_results/`](https://github.com/phi-lab-research/soromox/tree/main/paper_results)
-directory contains experiment entry points, canonical outputs, and
-workflow-specific notes. Install its dependencies from an editable checkout:
+The [SoRoMoX paper experiments repository](https://github.com/phi-lab-research/soromox-paper-experiments) contains the experiment
+entry points, canonical outputs, and pinned environments. Start with its
+[experiment index](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/README.md).
 
 ```bash
-python -m pip install -e ".[paper_results]"
+git clone https://github.com/phi-lab-research/soromox-paper-experiments.git
+cd soromox-paper-experiments
+git lfs pull
+uv sync --locked --group test --group paper-benchmarks
 ```
 
-Start with the README nearest to the experiment you want to reproduce. Record
-the SoRoMoX version, hardware, solver configuration, and random seed with new
-results. For package setup, see [Installation](installation.md).
+The experiments install a pinned SoRoMoX release. Record the experiment commit,
+SoRoMoX version, hardware, solver configuration, and random seed with new results.
+For library setup, see [Installation](installation.md).
 
 If you publish work based on these models or results, follow the
 [Citation](citation.md) guide.

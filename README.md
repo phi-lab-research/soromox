@@ -38,6 +38,14 @@ parallelization, and the control-oriented model interface.
 > derivations with scalable numerical implementations and extending the model
 > families and common interfaces.
 
+## Reproduce the paper
+
+The **[SoRoMoX paper experiments](https://github.com/phi-lab-research/soromox-paper-experiments)** repository contains the experiment
+code, datasets, checkpoints, and publication figures. Its
+[experiment index](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/README.md)
+maps each paper section to reproduction instructions and a pinned environment.
+Use this repository for the reusable library and API examples.
+
 ## Models and numerical interface
 
 - **Soft robot model implementations:** articulated soft-robot, PCS, and GVS
@@ -105,7 +113,6 @@ Optional extras add the dependencies needed for a workflow:
 python -m pip install "soromox[rendering]"     # all rendering backends
 python -m pip install "soromox[examples]"      # runnable examples
 python -m pip install "soromox[rl]"            # reinforcement learning examples
-python -m pip install "soromox[paper_results]" # paper reproduction workflows
 ```
 
 For an editable source installation:
