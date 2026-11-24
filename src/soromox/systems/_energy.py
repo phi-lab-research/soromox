@@ -40,12 +40,9 @@ def energy_jvp(primals, tangents):
             direction = direction + model._kinetic_energy_qd_jvp_tangent(
                 q, velocity, dv
             )
-    if dq is not None and kind != "kinetic":
-        if kind == "gravitational":
-            force = model.gravitational_force(q)
-        elif kind == "elastic":
-            force = model.elastic_force(q)
-        else:
-            force = model._potential_energy_gradient(q)
-        direction = direction + force @ dq
+    if dq is not None:
+        if kind in ("gravitational", "potential", "total"):
+            direction = direction + model._gravitational_energy_q_jvp_tangent(q, dq)
+        if kind in ("elastic", "potential", "total"):
+            direction = direction + model.elastic_force(q) @ dq
     return value, direction

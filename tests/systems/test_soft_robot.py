@@ -322,6 +322,12 @@ def test_shared_energy_derivatives_compose(factory, floating_base, monkeypatch):
         jnp.linspace(-0.02, 0.03, robot.num_internal_dofs), base_pose=base_pose
     )
     v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+    assert_allclose(
+        robot.kinetic_energy(q, v),
+        0.5 * v @ robot.inertia_matrix(q) @ v,
+        rtol=1e-6,
+        atol=1e-8,
+    )
     dq, dv = jnp.full_like(q, 0.01), jnp.full_like(v, 0.02)
     original = type(robot)._analytical_energy_jvp
 
@@ -354,6 +360,114 @@ def test_shared_energy_derivatives_compose(factory, floating_base, monkeypatch):
                 expected = derivatives(raw)
             for a, b in zip(
                 jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True
+            ):
+                assert_allclose(a, b, rtol=1e-6, atol=1e-8)
+        jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+def test_energy_derivatives_avoid_execution_dispatch(factory, monkeypatch):
+    """Energy values and derivatives use protected JAX equations on every backend."""
+    robot = factory(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+    dq, dv = jnp.ones_like(q), jnp.ones_like(v)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("energy derivative entered dynamics execution dispatch")
+
+    monkeypatch.setattr(type(robot), "dynamics_terms", forbidden)
+    for enabled in (False, True):
+        with custom_jvp_mode(enabled):
+            fn = jax.jit(
+                lambda q, v: (
+                    jax.jvp(robot.total_energy, (q, v), (dq, dv)),
+                    jax.grad(robot.total_energy, argnums=(0, 1))(q, v),
+                    jax.grad(lambda v: robot.kinetic_energy(q, v))(v),
+                )
+            )
+            result = fn(q, v)
+        assert all(jnp.all(jnp.isfinite(x)) for x in jax.tree.leaves(result))
+        jax.clear_caches()
+
+
+def test_pcs_composite_energies_use_ad_gravity(monkeypatch):
+    robot = _spatial_robot(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("PCS energy requested analytical gravity")
+
+    monkeypatch.setattr(type(robot), "_gravitational_force", forbidden)
+    for kind in ("gravitational", "potential", "total"):
+
+        def fn(q, public, kind=kind):
+            method = getattr(robot, f"{kind}_energy" if public else f"_{kind}_energy")
+            return method(q, v) if kind == "total" else method(q)
+
+        with custom_jvp_mode(True):
+            actual = jax.jit(jax.grad(lambda q: fn(q, True)))(q)
+            expected = jax.jit(jax.grad(lambda q: fn(q, False)))(q)
+        assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+    jax.clear_caches()
+
+
+def test_gvs_pose_arc_length_uses_autodiff(monkeypatch):
+    robot = _gvs_robot(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    s = jnp.array(0.05)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("GVS pose requested analytical arc-length recurrence")
+
+    monkeypatch.setattr(
+        type(robot), "_forward_kinematics_and_arc_length_derivative", forbidden
+    )
+    with custom_jvp_mode(True):
+        actual = jax.jit(
+            jax.jacfwd(lambda s: robot.forward_kinematics(q, s, backend="jax"))
+        )(s)
+        expected = jax.jit(
+            jax.jacfwd(lambda s: robot._absolute_forward_kinematics(q, s))
+        )(s)
+    assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_scalar_jacobian_aliases_share_derivative_routing(
+    factory, enabled, monkeypatch
+):
+    robot = factory(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    s = jnp.array(0.05)
+    original = type(robot)._jacobian_jvp
+    calls = []
+
+    def observed(self, *args, **kwargs):
+        assert enabled, "disabled analytical Jacobian rule was called"
+        calls.append(True)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(robot), "_jacobian_jvp", observed)
+    reference = None
+    for method in (robot.jacobian, robot.jacobian_inertialframe):
+        calls.clear()
+        with custom_jvp_mode(enabled):
+            result = jax.jit(
+                lambda q, method=method: (
+                    jax.jvp(lambda q: method(q, s), (q,), (jnp.ones_like(q),)),
+                    jax.grad(lambda q: jnp.sum(method(q, s)))(q),
+                )
+            )(q)
+        assert bool(calls) == enabled
+        if reference is None:
+            reference = result
+        else:
+            for a, b in zip(
+                jax.tree.leaves(result), jax.tree.leaves(reference), strict=True
             ):
                 assert_allclose(a, b, rtol=1e-6, atol=1e-8)
         jax.clear_caches()

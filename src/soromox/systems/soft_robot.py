@@ -1077,10 +1077,9 @@ class SoftRobot(DynamicalSystem):
         """
         Evaluate the complete FK custom JVP with the narrowest needed hooks.
 
-        The arc-length-only tangent uses the analytical
-        ``forward_kinematics_and_arc_length_derivative`` hook when available,
-        because systems often have a compact closed-form expression for
-        ``d pose / ds``. Configuration-only and mixed ``q``/``s`` tangents
+        The arc-length-only tangent uses the model-selected action. The default
+        uses ``forward_kinematics_and_arc_length_derivative`` for a compact
+        analytical ``d pose / ds``; GVS selects scalar-primal AD instead. Configuration-only and mixed ``q``/``s`` tangents
         intentionally use JAX autodiff through ``_forward_kinematics``. Earlier
         specialized FK velocity paths duplicated substantial kinematics code
         and did not show enough benchmark benefit to justify the maintenance
@@ -1119,10 +1118,16 @@ class SoftRobot(DynamicalSystem):
         elif self.floating_base:
             pose, pose_tangent = jvp(lambda s_: forward_kinematics(q, s_), (s,), (sd,))
         else:
-            pose, poses = self.forward_kinematics_and_arc_length_derivative(q, s)
-            pose_tangent = poses * sd
+            pose, pose_tangent = self._forward_kinematics_arc_length_jvp(q, s, sd)
 
         return pose, pose_tangent
+
+    def _forward_kinematics_arc_length_jvp(
+        self, q: Array, s: Array, sd: Array
+    ) -> tuple[Array, Array]:
+        """Select the scalar arc-length action used by ordinary JAX transforms."""
+        pose, pose_s = self.forward_kinematics_and_arc_length_derivative(q, s)
+        return pose, pose_s * sd
 
     def forward_kinematics_tips(self, q: Array) -> Array:
         """
@@ -2734,7 +2739,7 @@ class SoftRobot(DynamicalSystem):
 
         Default implementation: T = 0.5 * qd^T * M(q) * qd.
         """
-        M = self.inertia_matrix(q)
+        M = self._kinetic_energy_inertia_matrix(q, qd)
         T = 0.5 * qd @ M @ qd
         return T
 
@@ -2756,13 +2761,13 @@ class SoftRobot(DynamicalSystem):
 
     def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
         """
-        Return the inertia matrix used by the kinetic-energy custom JVP.
+        Return the shared JAX inertia source for kinetic energy and its JVP.
 
-        Systems that override ``dynamics_terms`` can reuse that assembled
-        inertia matrix instead of materializing it through the public matrix API.
+        Models can override this hook with an efficient protected JAX assembly.
+        It must agree with ``inertia_matrix`` and avoid execution dispatch.
+        Identical primal/tangent requests can then share the compiled assembly.
         """
-        M, _, _ = self.dynamics_terms(q, qd)
-        return M
+        return self.inertia_matrix(q)
 
     def _kinetic_energy_coriolis_cross_force(
         self, q: Array, qd: Array, qd_tangent: Array
@@ -2771,16 +2776,20 @@ class SoftRobot(DynamicalSystem):
         Return ``C(q, qd_tangent) @ qd`` for the configuration tangent.
 
         The cross term is obtained by a velocity-direction JVP through
-        ``dynamics_terms``:
+        protected ``_assemble_dynamics_terms`` equations:
         ``d(C(v) @ v)[qd, qd_tangent] / 2 = C(q, qd_tangent) @ qd``
         for the standard Christoffel/energy-consistent Coriolis convention.
         """
         _, coriolis_cross = jvp(
-            lambda velocity: self.dynamics_terms(q, velocity)[1],
+            lambda velocity: self._assemble_dynamics_terms(q, velocity)[1],
             (qd,),
             (qd_tangent,),
         )
         return 0.5 * coriolis_cross
+
+    def _gravitational_energy_q_jvp_tangent(self, q: Array, dq: Array) -> Array:
+        """Supply the gravity-energy action independently of kinetic/elastic rules."""
+        return self.gravitational_force(q) @ dq
 
     def gravitational_energy(self, q: Array) -> Array:
         """

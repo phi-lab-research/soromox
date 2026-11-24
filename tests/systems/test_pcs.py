@@ -1183,13 +1183,14 @@ def test_pcs_jacobian_mixed_jvp_uses_protected_primal_autodiff() -> None:
     assert_allclose(Jd, expected_Jd, rtol=RTOL, atol=ATOL)
 
 
-def test_pcs_gravitational_energy_grad_uses_analytical_force_hook() -> None:
+def test_pcs_gravitational_energy_grad_uses_scalar_energy_autodiff() -> None:
     model = _sentinel_pcs_model(_SentinelGravitationalEnergyJVPPCS)
     q = random_q(model, jax.random.PRNGKey(6), scale=0.02)
 
     dU_dq = jax.grad(lambda q_: model.gravitational_energy(q_))(q)
 
-    assert_allclose(dU_dq, model._gravitational_force(q), rtol=RTOL, atol=ATOL)
+    expected = jax.grad(model._gravitational_energy)(q)
+    assert_allclose(dU_dq, expected, rtol=RTOL, atol=ATOL)
 
 
 def test_pcs_custom_jvps_match_real_analytical_methods() -> None:

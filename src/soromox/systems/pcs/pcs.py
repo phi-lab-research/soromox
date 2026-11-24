@@ -3810,6 +3810,14 @@ class PCS(SoftRobot):
             params.end_segment_index_array,
         )
 
+    def _gravitational_energy_q_jvp_tangent(self, q: Array, dq: Array) -> Array:
+        """Differentiate scalar potential without assembling quadrature Jacobians."""
+        return jvp(self._gravitational_energy, (q,), (dq,))[1]
+
+    def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
+        """Reuse the protected JAX dynamics assembly; unused force outputs are pruned."""
+        return self._assemble_dynamics_terms(q, qd)[0]
+
     @eqx.filter_jit
     def _gravitational_energy(self, q: Array) -> Array:
         """

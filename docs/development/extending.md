@@ -500,6 +500,18 @@ For forward kinematics, configuration and mixed tangents use JAX autodiff
 through `_forward_kinematics`, while arc-length-only tangents use
 `forward_kinematics_and_arc_length_derivative(q, s)` so systems can still share
 the primal pose computation with an analytical `d pose / ds`.
+The `_forward_kinematics_arc_length_jvp` hook selects this action; GVS overrides
+it to use AD of the scalar pose recurrence. Explicit analytical arc-length
+helpers keep their specified algorithms.
+
+Kinetic energy and its velocity action share `_kinetic_energy_inertia_matrix`.
+This hook must use JAX equations without execution-backend dispatch. Continuum
+models select inertia from their protected dynamics assembly so unused force
+outputs can be pruned. The same inertia source in primal and tangent code lets
+compilation share the assembly. Gravity energy has its own
+`_gravitational_energy_q_jvp_tangent` hook: PCS uses AD of the scalar potential.
+Potential and total energy compose that action with the elastic and kinetic
+contributions.
 
 When implementing a new system, prefer overriding the protected hooks below and
 let the shared execution adapters provide the custom-JVP wrappers:

@@ -3469,6 +3469,10 @@ class PlanarPCS(SoftRobot):
             params.end_segment_index_array,
         )
 
+    def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
+        """Reuse the protected JAX dynamics assembly; unused force outputs are pruned."""
+        return self._assemble_dynamics_terms(q, qd)[0]
+
     @eqx.filter_jit
     def _gravitational_energy(self, q: Array) -> Array:
         """

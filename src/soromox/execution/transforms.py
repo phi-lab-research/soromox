@@ -270,10 +270,14 @@ def _evaluate_inertial_jacobian_jvp(
 ) -> tuple[Array, Array]:
     """Differentiate the model's established scalar JAX Jacobian."""
 
-    return eqx.filter_jvp(
-        lambda model, q, s: model._absolute_inertial_jacobian(q, s),
+    return _inertial_jacobian_jvp(primals, tangents)
+
+
+def _inertial_jacobian_jvp(primals, tangents):
+    return _jacobian_jvp(
         primals,
         tangents,
+        lambda model, q, s: model._absolute_inertial_jacobian(q, s),
     )
 
 
@@ -333,19 +337,11 @@ def make_kinematics_evaluators(
         tangents: tuple[Any, Array | None, Array | None],
     ) -> tuple[KinematicsResult, KinematicsResult]:
         if operation == "jacobian":
-            return eqx.filter_jvp(
-                lambda model_, q_, s_: model_._absolute_inertial_jacobian(q_, s_),
-                primals,
-                tangents,
-            )
+            return _inertial_jacobian_jvp(primals, tangents)
         pose, pose_tangent = _pose_jvp(primals, tangents)
         if operation == "pose":
             return pose, pose_tangent
-        jacobian, jacobian_tangent = eqx.filter_jvp(
-            lambda model_, q_, s_: model_._absolute_inertial_jacobian(q_, s_),
-            primals,
-            tangents,
-        )
+        jacobian, jacobian_tangent = _inertial_jacobian_jvp(primals, tangents)
         return (pose, jacobian), (pose_tangent, jacobian_tangent)
 
     @jax.custom_batching.custom_vmap
@@ -628,11 +624,16 @@ def evaluate_jacobian(model, q, s):
 
 @evaluate_jacobian.def_jvp
 def _evaluate_jacobian_jvp(primals, tangents):
+    return _jacobian_jvp(primals, tangents, _jacobian_primal)
+
+
+def _jacobian_jvp(primals, tangents, primal):
     model, q, s = primals
-    if custom_jvp_enabled() and not model.floating_base:
+    hook = getattr(model, "_jacobian_jvp", None)
+    if custom_jvp_enabled() and not model.floating_base and hook is not None:
         dmodel, dq, ds = tangents
-        return model._jacobian_jvp(q, s, dq, ds, model_tangent=dmodel)
-    return eqx.filter_jvp(_jacobian_primal, primals, tangents)
+        return hook(q, s, dq, ds, model_tangent=dmodel)
+    return eqx.filter_jvp(primal, primals, tangents)
 
 
 def _energy_primal(model, q, velocity, kind):

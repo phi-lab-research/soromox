@@ -44,13 +44,16 @@ substantially between the two transformations.
 
 ## Choosing a derivative mode
 
-**Use autodiff by default. Enable custom derivatives for state Jacobians and
-state JVPs/VJPs of large, full-strain PCS models on CPU.**
+**Use autodiff by default. Enable custom derivatives for the workloads listed
+below.** Choose by the differentiated quantity: a dynamics recommendation does
+not determine the best mode for a pose, geometric Jacobian, or scalar energy.
+
+### Dynamics gradients
 
 | Query or workload | CPU | GPU |
 |---|---|---|
-| Large, full-strain PCS: full state Jacobian | Custom derivatives | Autodiff |
-| Large, full-strain PCS: state JVP or VJP | Custom derivatives | Autodiff |
+| Large, full-strain PCS forward dynamics: full state Jacobian | Custom derivatives | Autodiff |
+| Large, full-strain PCS forward dynamics: state JVP or VJP | Custom derivatives | Autodiff |
 | Small or reduced-strain models | Autodiff | Autodiff |
 | Control-only gradients | Autodiff | Autodiff |
 | Mixed state/control/parameter gradients | Autodiff | Autodiff |
@@ -61,6 +64,54 @@ These recommendations use the current PCS forward-dynamics measurements. The
 large full-strain case has 96 velocities; this is an example, not a prescribed
 size threshold. Measurement conditions and complete results are in the
 [derivative comparison](https://github.com/phi-lab-research/soromox/pull/261).
+
+### Kinematics gradients
+
+| Query or workload | CPU | GPU |
+|---|---|---|
+| Pose derivatives with respect to configuration | Autodiff | Autodiff |
+| PCS pose derivative with respect to arc length | Autodiff | Custom derivatives |
+| PlanarPCS or GVS pose derivative with respect to arc length | Autodiff | Autodiff |
+| PCS geometric-Jacobian VJP | Custom derivatives | Custom derivatives |
+| PlanarPCS geometric-Jacobian VJP | Custom derivatives | Autodiff |
+| Geometric-Jacobian JVP or full derivative matrix | Autodiff | Autodiff |
+| Mixed configuration/arc-length or model-parameter derivatives | Autodiff | Autodiff |
+| Other kinematics queries | Autodiff | Autodiff |
+
+A pose derivative and a derivative of the geometric Jacobian are different
+queries. The latter differentiates `J(q, s)` itself, as needed when a loss or a
+controller depends on `J`. A custom JVP can also accelerate its transposed VJP;
+small forward-mode gains do not imply small reverse-mode gains.
+
+PCS and planar PCS retain their simple analytical pose arc-length rules in
+custom mode. GVS uses AD of its pose recurrence. The equivalent scalar methods
+`jacobian()` and `jacobian_inertialframe()` share derivative selection, including
+the Jacobian output of scalar pose/Jacobian queries. Specialized spatial batches
+retain their own traversal and AD rules.
+
+### Energy gradients
+
+| Query or workload | CPU | GPU |
+|---|---|---|
+| Configuration/velocity gradients of kinetic, gravitational, elastic, potential, or total energy | Autodiff | Autodiff |
+| Directional energy derivatives | Autodiff | Autodiff |
+| Energy gradients involving model parameters or floating bases | Autodiff | Autodiff |
+| Other energy queries | Autodiff | Autodiff |
+
+Energy rules compose by contribution. PCS uses AD for gravitational energy,
+including its contribution to potential and total energy, and retains the
+kinetic and elastic rules. Kinetic energy and its velocity derivative share a
+protected JAX inertia source; these queries do not launch Warp dynamics kernels.
+The shared inertia optimization also accelerates ordinary autodiff. With the
+remaining gains close or mixed, use autodiff for energy gradients. The custom
+rules remain available, and their coverage is listed below.
+
+The kinematics and energy recommendations use PCS with 16 segments, planar PCS
+with four segments, and GVS with four segments, in double precision on CPU and
+an RTX 5090. They describe isolated queries. Use autodiff for complete rollout
+losses and unlisted workloads.
+
+### Selecting the mode
 
 Select autodiff before tracing application functions:
 
@@ -130,32 +181,46 @@ inertia solve. Model-parameter directions use AD of the terms and forces, follow
 by the implicit acceleration derivative. Other systems use AD for those queries.
 There is no analytical-only mode that forces every dependency onto a closed form.
 
-### Kinematics and energy
+### Kinematics
 
-Here `J(q, s)` refers to the system's `robot.jacobian(q, s)` method, which returns
-a geometric velocity Jacobian. Differentiating `J` computes its derivatives.
+Here `J(q, s)` is the geometric velocity Jacobian returned by `jacobian()`.
+For PCS, planar PCS, and GVS, `jacobian_inertialframe()` is the equivalent
+scalar query. Differentiating `J` computes its derivatives.
 
-| Model or system | Pose with respect to `q` | Pose with respect to `s` | `J` with respect to `q` | `J` with respect to `s` | Gravitational/elastic energy with respect to `q` | Kinetic energy with respect to `(q, v)` |
-|---|---|---|---|---|---|---|
-| PCS, ISupport | AD | Analytical | Analytical | Analytical | Analytical | Hybrid |
-| PlanarPCS, PlanarHSA | AD | Analytical | Analytical | Analytical | Analytical | Hybrid |
-| GVS, Helicoidal | AD | Analytical | Analytical | Analytical | Analytical | Hybrid |
-| Pendulum | AD | AD | Analytical | AD | Analytical | Hybrid |
-| ArticulatedSoftRobot, McKibbenActuatedUMArm | AD | AD | Analytical | AD | Analytical | Hybrid |
+| Model or system | Pose with respect to `q` | Pose with respect to `s` | `J` with respect to `q` | `J` with respect to `s` |
+|---|---|---|---|---|
+| PCS, ISupport | AD | Analytical | Analytical | Analytical |
+| PlanarPCS, PlanarHSA | AD | Analytical | Analytical | Analytical |
+| GVS, Helicoidal | AD | AD | Analytical | Analytical |
+| Pendulum | AD | AD | Analytical | AD |
+| ArticulatedSoftRobot, McKibbenActuatedUMArm | AD | AD | Analytical | AD |
 
-Mixed `q`/`s` kinematics directions and model-parameter contributions use AD.
-The entries refer to scalar backbone queries and ordinary JAX transformations;
-specialized batched and frame-specific methods can use AD instead. Floating-base
-kinematics and energy derivatives use AD. Potential and total energy compose the
-underlying energy rules. Kinetic-energy velocity derivatives use inertia actions;
-configuration derivatives also use an AD convective-force action.
+Mixed `q`/`s` directions and requests involving model parameters use joint AD.
+These entries describe scalar backbone queries. Specialized batched methods can
+use AD instead. Floating-base derivatives use AD. Explicit analytical
+arc-length helpers remain available for GVS.
 
-Parameter derivatives of energies use one joint AD evaluation when model leaves
-are active. For state-only requests, the energy rules reuse model force and
-inertia identities and omit inactive contributions. VJPs and full Jacobians can
-be obtained from the same JVP rules through JAX transformations.
+### Energy
 
-## Kinematics and energy examples
+| Model or system | Gravitational energy: `q` | Elastic energy: `q` | Kinetic energy: `(q, v)` | Potential / total energy |
+|---|---|---|---|---|
+| PCS, ISupport | AD | Analytical | Hybrid | Hybrid |
+| PlanarPCS, PlanarHSA | Analytical | Analytical | Hybrid | Analytical / Hybrid |
+| GVS, Helicoidal | Analytical | Analytical | Hybrid | Analytical / Hybrid |
+| Pendulum | Analytical | Analytical | Hybrid | Analytical / Hybrid |
+| ArticulatedSoftRobot, McKibbenActuatedUMArm | Analytical | Analytical | Hybrid | Analytical / Hybrid |
+
+Kinetic-energy velocity derivatives use inertia actions; configuration
+derivatives also use an AD convective-force action. Potential and total energy
+compose the underlying rules, so PCS gravity can use AD while its kinetic and
+elastic contributions retain their custom rules.
+
+Requests involving model parameters use one joint AD evaluation. Floating-base
+energy derivatives also use AD. State-only rules omit inactive contributions.
+VJPs and full Jacobians are obtained from the same JVP rules through JAX
+transformations.
+
+## Kinematics examples
 
 ```python
 # Pose derivative along the backbone.
@@ -167,7 +232,12 @@ pose, pose_s = jax.jvp(
 # Directional change of the geometric Jacobian.
 J, dJ = jax.jvp(lambda position: robot.jacobian(position, s), (q,), (dq,))
 
-# Energy gradients.
+```
+
+## Energy examples
+
+```python
+# Gradients of scalar energies.
 gravity_gradient = jax.grad(robot.gravitational_energy)(q)
 elastic_gradient = jax.grad(robot.elastic_energy)(q)
 dE_dq, dE_dv = jax.grad(robot.total_energy, argnums=(0, 1))(q, v)

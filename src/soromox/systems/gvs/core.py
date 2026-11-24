@@ -2671,6 +2671,14 @@ class GVS(SoftRobot):
 
         return g_s
 
+    def _forward_kinematics_arc_length_jvp(
+        self, q: Array, s: Array, sd: Array
+    ) -> tuple[Array, Array]:
+        """Use AD of the scalar pose recurrence for transformed arc-length queries."""
+        return jax.jvp(
+            lambda s_value: self._absolute_forward_kinematics(q, s_value), (s,), (sd,)
+        )
+
     @eqx.filter_jit
     def _forward_kinematics_arc_length_derivative(self, q: Array, s: Array) -> Array:
         """
@@ -5810,6 +5818,10 @@ class GVS(SoftRobot):
     def _elastic_energy(self, q: Array) -> Array:
         """Return body strain energy plus installed passive-element energy."""
         return 0.5 * q @ self.K @ q + self.passive_elastic_energy(q)
+
+    def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
+        """Reuse the protected JAX dynamics assembly; unused force outputs are pruned."""
+        return self._assemble_dynamics_terms(q, qd)[0]
 
     @eqx.filter_jit
     def _gravitational_energy(self, q: Array) -> Array:
