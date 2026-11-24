@@ -78,7 +78,9 @@ by PCS, planar PCS, and GVS. The PCS inertial-only recurrences are private
 implementation details. Migrate calls to the former `inverse_dynamics_derivatives`,
 `inverse_dynamics_backward_pass`, or `inverse_dynamics_state_pushforward` helpers
 to JAX transformations of `inverse_dynamics` for complete required-effort
-derivatives. These include passive-force derivatives.
+derivatives. These include passive-force derivatives. For inertial effort alone,
+subtract `pcs.passive_force(q, qd)` from `pcs.inverse_dynamics(q, qd, qdd)`
+before applying the JAX transformation.
 
 Supported PCS state derivatives use analytical recurrences. Other dependencies
 use composable autodiff fallbacks. The forward-dynamics derivative reuses its
