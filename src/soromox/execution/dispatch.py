@@ -9,6 +9,7 @@ from jax import Array
 from soromox.execution.transforms import (
     evaluate_forward_kinematics,
     evaluate_inertial_jacobian,
+    evaluate_jax_dynamics_terms,
 )
 from soromox.execution.types import (
     ActuationCapabilities,
@@ -323,8 +324,8 @@ def dispatch_dynamics_terms(
     )
     if selected == "jax":
         if q.ndim == 1:
-            return model._assemble_dynamics_terms(q, qd)
-        return jax.vmap(model._assemble_dynamics_terms)(q, qd)
+            return evaluate_jax_dynamics_terms(model, q, qd)
+        return jax.vmap(evaluate_jax_dynamics_terms, in_axes=(None, 0, 0))(model, q, qd)
     warp_evaluator = get_dynamics_evaluator(capabilities.warp_executor)
     if q.ndim == 1:
         return warp_evaluator(model, q, qd)

@@ -64,13 +64,25 @@ SHEAR_MODULUS = 1.0e3
 MATERIAL_DAMPING_COEFFICIENT = 1.0e-3
 DEFAULT_SEGMENT_COUNTS = (1, 2, 4, 8, 16, 32)
 
-SETUPS = ("full", "bending_extension", "axial", "threadlike")
+SETUPS = ("full", "bending_extension", "axial", "threadlike", "custom_inertia")
 WORKLOADS = (
     "primal",
     "state_jvp",
     "state_jacobian_matvec",
     "state_jacobian",
     "all_jacobians",
+    "state_vjp",
+    "input_vjp",
+    "mixed_jvp",
+    "mixed_vjp",
+    "state_jacrev",
+    "state_directions",
+    "batched_state_jvp",
+    "rollout_loss_state",
+    "rollout_loss_input",
+    "rollout_loss_parameters",
+    "rollout_loss_mixed",
+    "rollout_loss_checkpointed",
     "rollout_actuation_jvp",
     "rollout_actuation_jacobian",
     "rollout_initial_position_jvp",
@@ -95,7 +107,7 @@ class BenchmarkInputs(NamedTuple):
 def _strain_selector(setup: str, num_segments: int) -> Array | None:
     if setup == "full":
         return None
-    if setup in {"bending_extension", "threadlike"}:
+    if setup in {"bending_extension", "threadlike", "custom_inertia"}:
         per_segment = jnp.array([False, False, True, True, False, False])
     elif setup == "axial":
         per_segment = jnp.array([False, False, False, True, False, False])
@@ -120,7 +132,7 @@ def _threadlike_actuator(num_segments: int) -> ThreadlikeActuator:
 def build_model(setup: str, num_segments: int, gauss_points: int) -> PCS:
     """Build one benchmark PCS configuration."""
     actuators = _threadlike_actuator(num_segments) if setup == "threadlike" else None
-    return PCS.from_links(
+    model = PCS.from_links(
         [
             LinkSpec.circular(
                 length=LINK_LENGTH,
@@ -139,7 +151,13 @@ def build_model(setup: str, num_segments: int, gauss_points: int) -> PCS:
             strain_selector=_strain_selector(setup, num_segments),
         ),
         actuators=actuators,
+        backend="jax",
     )
+    if setup == "custom_inertia":
+        model = model.update_link_params(
+            tip_inertia=jnp.broadcast_to(0.01 * jnp.eye(6), (num_segments, 6, 6))
+        )
+    return model
 
 
 def build_inputs(model: PCS) -> BenchmarkInputs:
@@ -194,6 +212,7 @@ def rollout_final_position(
     rollout_steps: int,
     rollout_dt: float,
     use_custom_jvp: bool,
+    checkpoint: bool = False,
 ) -> Array:
     """Return ``q(T)`` from a short fixed-step symplectic-Euler rollout."""
     dt = jnp.asarray(rollout_dt, dtype=y.dtype)
@@ -211,7 +230,7 @@ def rollout_final_position(
         return jnp.concatenate([q_next, qd_next]), None
 
     final_y, _ = jax.lax.scan(
-        step,
+        jax.checkpoint(step) if checkpoint else step,
         y,
         jnp.arange(rollout_steps, dtype=jnp.int32),
     )
@@ -264,6 +283,90 @@ def build_workload(
             rollout_dt=rollout_dt,
             use_custom_jvp=use_custom_jvp,
         )
+
+    def parameterized_dynamics(y, u, force, parameters):
+        updated = model_with_system_parameters(model, parameters)
+        if use_custom_jvp:
+            return updated.forward_dynamics(t, y, (u, force))
+        return updated._forward_dynamics(t, y, (u, force))
+
+    if workload in {"state_vjp", "input_vjp"}:
+
+        def product(y, u, force, parameters):
+            variable = y if workload == "state_vjp" else u
+
+            def evaluate(value):
+                return (
+                    dynamics(value, u, force, parameters)
+                    if workload == "state_vjp"
+                    else dynamics(y, value, force, parameters)
+                )
+
+            primal, pullback = jax.vjp(evaluate, variable)
+            return primal, pullback(y_direction)[0]
+
+        return product
+    if workload == "mixed_jvp":
+        return lambda y, u, force, parameters: jax.jvp(
+            parameterized_dynamics,
+            (y, u, force, parameters),
+            (
+                y_direction,
+                u_direction,
+                jnp.ones_like(force),
+                system_parameter_direction,
+            ),
+        )
+    if workload == "mixed_vjp":
+
+        def mixed_product(y, u, force, parameters):
+            primal, pullback = jax.vjp(parameterized_dynamics, y, u, force, parameters)
+            return primal, pullback(y_direction)
+
+        return mixed_product
+    if workload == "state_jacrev":
+        return lambda y, u, force, parameters: jax.jacrev(dynamics)(
+            y, u, force, parameters
+        )
+    if workload == "state_directions":
+
+        def directions(y, u, force, parameters):
+            primal, action = jax.linearize(
+                lambda state: dynamics(state, u, force, parameters), y
+            )
+            seeds = jnp.stack([jnp.roll(y_direction, i) for i in range(4)])
+            return primal, jax.vmap(action)(seeds)
+
+        return directions
+    if workload == "batched_state_jvp":
+        return lambda y, u, force, parameters: jax.vmap(
+            lambda state: jax.jvp(
+                lambda z: dynamics(z, u, force, parameters), (state,), (y_direction,)
+            )
+        )(y[None, :] + jnp.arange(4)[:, None] * 1e-3)
+    if workload.startswith("rollout_loss_"):
+        argnums = {
+            "rollout_loss_state": 0,
+            "rollout_loss_input": 1,
+            "rollout_loss_parameters": 3,
+            "rollout_loss_mixed": (0, 1, 3),
+            "rollout_loss_checkpointed": (0, 1, 3),
+        }[workload]
+
+        def loss(y, u, force, parameters):
+            final = rollout_final_position(
+                model_with_system_parameters(model, parameters),
+                y,
+                u,
+                force,
+                rollout_steps=rollout_steps,
+                rollout_dt=rollout_dt,
+                use_custom_jvp=use_custom_jvp,
+                checkpoint=workload == "rollout_loss_checkpointed",
+            )
+            return jnp.mean(final**2)
+
+        return jax.value_and_grad(loss, argnums=argnums)
 
     if workload == "primal":
         return dynamics
@@ -358,19 +461,44 @@ def block_until_ready(tree: Tree) -> None:
             leaf.block_until_ready()
 
 
+class Measurement(NamedTuple):
+    compilation: float
+    execution: float
+    output: Tree
+    samples: tuple[float, ...]
+    temporary_bytes: int | None
+    buffer_bytes: int | None
+
+
 def measure(
     fn: Workload,
     args: tuple[Array, Array, Array, Array],
     warmup_runs: int,
     repeats: int,
     calls_per_sample: int,
-) -> tuple[float, float, Tree]:
-    """Return estimated compilation seconds, median execution seconds, output."""
-    compiled = jax.jit(fn)
+) -> Measurement:
+    """Measure compilation, runtime distribution, and compiler buffer estimates.
+
+    Buffer estimates exclude allocator/runtime overhead and are not measured
+    device peak memory. They are useful for comparing checkpoint strategies.
+    """
     start = time.perf_counter()
+    compiled = jax.jit(fn).lower(*args).compile()
+    compilation = time.perf_counter() - start
     output = compiled(*args)
     block_until_ready(output)
-    first_call = time.perf_counter() - start
+    memory = compiled.memory_analysis()
+    temporary = None if memory is None else memory.temp_size_in_bytes
+    buffers = (
+        None
+        if memory is None
+        else (
+            memory.argument_size_in_bytes
+            + memory.output_size_in_bytes
+            + memory.temp_size_in_bytes
+            - memory.alias_size_in_bytes
+        )
+    )
 
     for _ in range(warmup_runs):
         output = compiled(*args)
@@ -385,8 +513,9 @@ def measure(
         samples.append((time.perf_counter() - start) / calls_per_sample)
 
     execution = statistics.median(samples)
-    compilation = max(0.0, first_call - execution)
-    return compilation, execution, output
+    return Measurement(
+        compilation, execution, output, tuple(samples), temporary, buffers
+    )
 
 
 def difference(reference: Tree, candidate: Tree) -> tuple[float, float]:
@@ -405,6 +534,10 @@ def difference(reference: Tree, candidate: Tree) -> tuple[float, float]:
         candidate_array = jnp.asarray(candidate_leaf)
         if reference_array.size == 0:
             continue
+        if not bool(jnp.all(jnp.isfinite(reference_array))) or not bool(
+            jnp.all(jnp.isfinite(candidate_array))
+        ):
+            return float("inf"), float("inf")
         absolute = float(jnp.max(jnp.abs(reference_array - candidate_array)))
         scale = max(float(jnp.max(jnp.abs(reference_array))), 1.0e-12)
         max_absolute = max(max_absolute, absolute)
@@ -438,7 +571,7 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
             )
 
             for workload in args.workloads:
-                measurements: dict[bool, tuple[float, float, Tree]] = {}
+                measurements: dict[bool, Measurement] = {}
                 for enabled in (False, True):
                     set_custom_jvp_enabled(enabled)
                     jax.clear_caches()
@@ -460,8 +593,8 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                         args.calls_per_sample,
                     )
 
-                compile_off, execution_off, output_off = measurements[False]
-                compile_on, execution_on, output_on = measurements[True]
+                compile_off, execution_off, output_off, *_ = measurements[False]
+                compile_on, execution_on, output_on, *_ = measurements[True]
                 max_absolute, max_relative = difference(output_off, output_on)
                 if max_relative > args.correctness_rtol:
                     raise AssertionError(
@@ -489,13 +622,21 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "max_relative_difference": max_relative,
                     "device": str(device),
                 }
+                for enabled, label in ((False, "autodiff"), (True, "analytical")):
+                    result = measurements[enabled]
+                    row[f"{label}_execution_stdev_s"] = statistics.pstdev(
+                        result.samples
+                    )
+                    row[f"{label}_temporary_bytes"] = result.temporary_bytes
+                    row[f"{label}_buffer_bytes"] = result.buffer_bytes
                 rows.append(row)
                 print(
                     f"{setup:21s} {num_segments:5d} {model.num_velocities:3d} "
                     f"{workload:35s} {1e3 * execution_off:8.3f} "
                     f"{1e3 * execution_on:8.3f} {speedup:7.2f}x "
                     f"{compile_off:11.3f} {compile_on:10.3f} "
-                    f"{max_relative:10.3e}"
+                    f"{max_relative:10.3e}",
+                    flush=True,
                 )
 
     set_custom_jvp_enabled(True)

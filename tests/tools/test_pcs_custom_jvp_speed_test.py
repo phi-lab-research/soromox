@@ -253,3 +253,12 @@ def test_rollout_derivative_workloads_match_direct_jax_autodiff(workload: str) -
 def test_invalid_rollout_options_are_rejected(option: str, value: str) -> None:
     with pytest.raises(SystemExit):
         benchmark.parse_args([option, value])
+
+
+def test_benchmark_rejects_nonfinite_results():
+    for value in (jnp.nan, jnp.inf):
+        absolute, relative = benchmark.difference(
+            jnp.array([value]), jnp.array([value])
+        )
+        assert absolute == float("inf")
+        assert relative == float("inf")

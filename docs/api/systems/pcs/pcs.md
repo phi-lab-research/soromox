@@ -50,6 +50,39 @@ replacement = pcs.params.link.replace(density=1.05 * pcs.params.link.density)
 pcs = pcs.with_params(pcs.params.replace(link=replacement))
 ```
 
+## Dynamics derivatives
+
+Use ordinary JAX transformations to differentiate forward dynamics, dynamics
+terms, or inverse dynamics. The derivative rules compose with a loss or an
+integration routine and preserve differentiation of continuous model parameters.
+
+```python
+import jax
+
+# Directional state derivative and reverse-mode control derivative.
+yd, dyd = jax.jvp(lambda y: pcs.forward_dynamics(t, y, (u,)), (y,), (dy,))
+bar_u = jax.grad(lambda u: cotangent @ pcs.forward_dynamics(t, y, (u,)))(u)
+
+# Required generalized effort and its configuration/velocity/acceleration Jacobians.
+effort = pcs.inverse_dynamics(q, qd, qdd)
+Dq, Dv, Da = jax.jacfwd(pcs.inverse_dynamics, argnums=(0, 1, 2))(q, qd, qdd)
+```
+
+`inverse_dynamics` returns `M @ qdd + Cqd + G + elastic + damping @ qd`, including
+installed passive elements. External applied forces must be subtracted from
+that effort. Converting the remaining generalized effort to actuator controls
+is a separate problem, particularly for an underactuated robot.
+
+The older `inverse_dynamics_derivatives` and `inverse_dynamics_backward_pass`
+helpers describe only `M @ qdd + Cqd + G`. Differentiate `inverse_dynamics`
+directly when passive-force derivatives are needed.
+
+Supported PCS state derivatives use analytical recurrences. Other dependencies
+use composable autodiff fallbacks. The forward-dynamics derivative reuses its
+inertia factorization across active contributions. A Jacobian of continuous
+forward dynamics is distinct from the Jacobian of an integration step; apply
+JAX to the step or rollout when that is the derivative your application needs.
+
 ## API Reference
 
 ::: soromox.systems.pcs.pcs

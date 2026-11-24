@@ -17,7 +17,6 @@ from soromox.actuation.friction import (
 )
 from soromox.actuation.threadlike import (
     BaseThreadlikeRoutingParams,
-    ThreadlikeActuator,
     ThreadlikeImpedance,
     ThreadlikeRouting,
 )
@@ -50,6 +49,7 @@ from soromox.systems.components.inertia import (
     spatial_mass_action,
     weighted_inertias,
 )
+from soromox.systems.pcs import _derivatives
 from soromox.systems.pcs.kinematics import constant_strain_segment_kinematics
 from soromox.systems.pcs.params import PCSParams
 from soromox.systems.pcs.structures import PCSStructure
@@ -69,8 +69,6 @@ from soromox.utils.joint_motion_subspace import (
 from soromox.utils.lie_algebra import se3, so3
 from soromox.utils.lie_algebra.constant_strain import se3 as constant_strain_se3
 from soromox.utils.numerics import safe_divide, safe_norm, safe_normalize
-
-_FUSED_STATE_PUSHFORWARD_MAX_DOFS = 64
 
 
 class PCS(SoftRobot):
@@ -3587,6 +3585,8 @@ class PCS(SoftRobot):
         q: Array,
         u: Array,
         q_tangent: Array,
+        qd: Array | None = None,
+        qd_tangent: Array | None = None,
     ) -> Array:
         """
         Compute the actuation-force directional derivative with respect to state.
@@ -3602,17 +3602,19 @@ class PCS(SoftRobot):
             force_tangent (Array): Directional derivative of the generalized
             actuation force. Shape is ``(self.num_velocities,)``.
 
-        Raises:
-            NotImplementedError: If an installed actuator has no analytical
-                PCS state-pushforward implementation.
+        Unsupported component laws use local autodiff.
         """
         force_tangent = jnp.zeros((self.num_velocities,), dtype=q.dtype)
+        qd = jnp.zeros_like(q) if qd is None else qd
+        qd_tangent = jnp.zeros_like(q) if qd_tangent is None else qd_tangent
         start = 0
         for actuator in self.actuators:
             stop = start + actuator.num_channels
-            if isinstance(actuator, IdentityActuator):
+            if isinstance(
+                actuator, IdentityActuator
+            ) and _derivatives.supports_analytical_actuator(actuator):
                 pass
-            elif isinstance(actuator, ThreadlikeActuator):
+            elif _derivatives.supports_analytical_actuator(actuator):
                 moment_matrix_tangent = (
                     self._threadlike_moment_matrix_state_pushforward(
                         q,
@@ -3623,9 +3625,17 @@ class PCS(SoftRobot):
                 )
                 force_tangent = force_tangent + moment_matrix_tangent @ u[start:stop]
             else:
-                raise NotImplementedError(
-                    "Analytical PCS state JVPs require an analytical actuator "
-                    f"pushforward; unsupported component: {type(actuator).__name__}."
+
+                def component_force(
+                    position, velocity, actuator=actuator, start=start, stop=stop
+                ):
+                    return actuator.transmission.actuation_matrix(
+                        self, position
+                    ) @ actuator.efforts(self, position, u[start:stop], velocity)
+
+                force_tangent = (
+                    force_tangent
+                    + jvp(component_force, (q, qd), (q_tangent, qd_tangent))[1]
                 )
             start = stop
         return force_tangent
@@ -3655,17 +3665,26 @@ class PCS(SoftRobot):
             force_tangent (Array): Directional derivative of the generalized
             passive applied force. Shape is ``(self.num_velocities,)``.
 
-        Raises:
-            NotImplementedError: If an installed passive element has no
-                analytical PCS state-pushforward implementation.
+        Unsupported component laws use local autodiff.
         """
         force_tangent = jnp.zeros((self.num_velocities,), dtype=q.dtype)
         for element in self.passive_elements:
-            if not isinstance(element, ThreadlikeImpedance):
-                raise NotImplementedError(
-                    "Analytical PCS state JVPs require an analytical passive-force "
-                    f"pushforward; unsupported component: {type(element).__name__}."
+            if not (
+                type(element) is ThreadlikeImpedance
+                and type(element.routing) is ThreadlikeRouting
+            ):
+
+                def component_force(position, velocity, element=element):
+                    return (
+                        -element.elastic_force(self, position)
+                        - element.damping_matrix(self, position) @ velocity
+                    )
+
+                force_tangent = (
+                    force_tangent
+                    + jvp(component_force, (q, qd), (q_tangent, qd_tangent))[1]
                 )
+                continue
 
             moment_matrix = self._threadlike_path_length_jacobian(q, element.routing).T
             moment_matrix_tangent = self._threadlike_moment_matrix_state_pushforward(
@@ -4861,6 +4880,12 @@ class PCS(SoftRobot):
             warp_supported=type(self) is PCS,
         )
 
+    def _analytical_dynamics_terms_jvp(self, primals, tangents):
+        """Optional hook used after shared shape and backend validation."""
+        if not custom_jvp_enabled():
+            return None
+        return _derivatives.terms_jvp(primals, tangents)
+
     @eqx.filter_jit
     def _assemble_dynamics_terms(
         self, q: Array, qd: Array
@@ -4960,34 +4985,31 @@ class PCS(SoftRobot):
         self, t: Array, y: Array, actuation_args: tuple | None = None
     ) -> Array:
         """Evaluate the current JAX equations without the analytical FD rule."""
-        from soromox.execution.transforms import _assemble_forward_dynamics
+        return _derivatives.forward_dynamics_reference(self, t, y, actuation_args)
 
-        return _assemble_forward_dynamics(
-            self, t, y, actuation_args, backend="jax", capabilities=PCS_DYNAMICS
+    def _supports_analytical_inertia(self) -> bool:
+        """Whether the spatial recurrences cover this model's inertia and state."""
+        return (
+            type(self) is PCS
+            and not self.floating_base
+            and not self._has_custom_inertia
         )
 
     def _supports_analytical_dynamics(self) -> bool:
         """Whether the original PCS recurrences cover this model's physics.
 
-        Floating states, distributed/attached custom inertia, friction, and
-        other routing/effort laws use the shared differentiable JAX equations.
-        This structural check never branches on tangent values.
+        False selects a fallback for explicit full-Jacobian helpers. Product
+        rules can still retain analytical inertia and differentiate only the
+        unsupported force components. Floating states and custom inertia use
+        the current JAX equations. This check never tests tangent values.
         """
         return (
-            not self.floating_base
-            and not self._has_custom_inertia
+            self._supports_analytical_inertia()
             and all(
-                isinstance(a, IdentityActuator)
-                or (
-                    isinstance(a, ThreadlikeActuator)
-                    and isinstance(a.transmission.routing, ThreadlikeRouting)
-                    and a.transmission.friction.is_frictionless
-                )
-                for a in self.actuators
+                _derivatives.supports_analytical_actuator(a) for a in self.actuators
             )
             and all(
-                isinstance(e, ThreadlikeImpedance)
-                and isinstance(e.routing, ThreadlikeRouting)
+                type(e) is ThreadlikeImpedance and type(e.routing) is ThreadlikeRouting
                 for e in self.passive_elements
             )
         )
@@ -4996,7 +5018,7 @@ class PCS(SoftRobot):
         self, primals: tuple[Any, ...], tangents: tuple[Any, ...]
     ) -> tuple[Array, Array] | None:
         """Optional shared-execution hook; return None for unsupported physics."""
-        if not custom_jvp_enabled() or not self._supports_analytical_dynamics():
+        if not custom_jvp_enabled() or not self._supports_analytical_inertia():
             return None
         return PCS._forward_dynamics_state_jvp(primals, tangents)
 
@@ -5004,6 +5026,11 @@ class PCS(SoftRobot):
         self, t: Array, y: Array, actuation_args: tuple | None = None
     ) -> tuple[Array, Array]:
         """Evaluate forward dynamics and return its assembled inertia matrix."""
+        yd, mass, _ = self._forward_dynamics_with_factors(t, y, actuation_args)
+        return yd, mass
+
+    def _forward_dynamics_with_factors(self, t, y, actuation_args=None):
+        """Prepare the primal and reusable factors for explicit Jacobian helpers."""
         del t
 
         # Split the state vector into configuration and velocity
@@ -5031,13 +5058,14 @@ class PCS(SoftRobot):
 
         rhs = tau_u + tau_ext - Cqd - G - tau_el - self.damping_matrix(q) @ qd
 
-        qdd = self._solve_inertia(B, rhs)
+        factors = _derivatives.factor_inertia(B)
+        qdd = _derivatives.solve_factored(factors, rhs)
 
         yd = self.pack_state(
             self.configuration_derivative(q, qd), qdd, jnp.zeros_like(auxiliary)
         )
 
-        return yd, B
+        return yd, B, factors
 
     @eqx.filter_custom_jvp
     @staticmethod
@@ -5059,182 +5087,8 @@ class PCS(SoftRobot):
         primals: tuple["PCS", Array, Array, tuple | None],
         tangents: tuple[Any, Array | None, Array | None, tuple | None],
     ) -> tuple[Array, Array]:
-        """
-        Evaluate the analytical PCS forward-dynamics state JVP.
-
-        State directions use a fused analytical dynamics assembly and apply
-        ``dID/dqdd = M`` through an implicit acceleration solve instead of
-        differentiating the Cholesky solve. PCS actuator and passive-element
-        state directions use explicit directional kernels as well.
-        Model-parameter directions are handled separately below because they
-        are outside the state-only analytical contract.
-        """
-        robot, t, y, actuation_args = primals
-        if not robot._supports_analytical_dynamics():
-            return eqx.filter_jvp(
-                lambda model, time, state, inputs: model._forward_dynamics(
-                    time, state, inputs
-                ),
-                primals,
-                tangents,
-            )
-        robot_tangent, _, y_tangent, actuation_args_tangent = tangents
-
-        robot_has_tangent = any(
-            tangent is not None
-            for tangent in tree_util.tree_leaves(
-                robot_tangent,
-                is_leaf=lambda value: value is None,
-            )
-        )
-        q, qd = jnp.split(y, 2)
-
-        if y_tangent is None:
-            q_tangent = jnp.zeros_like(q)
-            qd_tangent = jnp.zeros_like(qd)
-        else:
-            q_tangent, qd_tangent = jnp.split(y_tangent, 2)
-
-        if actuation_args is None:
-            u = jnp.zeros((robot.num_actuators,), dtype=q.dtype)
-            tau_ext = jnp.zeros_like(q)
-            u_tangent = jnp.zeros_like(u)
-            tau_ext_tangent = jnp.zeros_like(tau_ext)
-            u_has_tangent = False
-            tau_ext_has_tangent = False
-        else:
-            u = actuation_args[0]
-            tau_ext = actuation_args[1] if len(actuation_args) == 2 else None
-            if actuation_args_tangent is None:
-                u_tangent = None
-                tau_ext_tangent = None
-            else:
-                u_tangent = actuation_args_tangent[0]
-                tau_ext_tangent = (
-                    actuation_args_tangent[1]
-                    if len(actuation_args_tangent) == 2
-                    else None
-                )
-
-            if u is None:
-                u = jnp.zeros((robot.num_actuators,), dtype=q.dtype)
-            if tau_ext is None:
-                tau_ext = jnp.zeros_like(q)
-            u_has_tangent = u_tangent is not None
-            tau_ext_has_tangent = tau_ext_tangent is not None
-            if u_tangent is None:
-                u_tangent = jnp.zeros_like(u)
-            if tau_ext_tangent is None:
-                tau_ext_tangent = jnp.zeros_like(tau_ext)
-
-        if y_tangent is None:
-            yd, mass_matrix = robot._forward_dynamics_with_inertia(
-                t,
-                y,
-                actuation_args,
-            )
-            _, qdd = jnp.split(yd, 2)
-            inverse_dynamics_tangent = jnp.zeros_like(q)
-        elif robot.num_velocities > _FUSED_STATE_PUSHFORWARD_MAX_DOFS:
-            # For large dense systems, carrying one contracted wrench direction
-            # is cheaper than materializing the directional inertia matrix.
-            yd, mass_matrix = robot._forward_dynamics_with_inertia(
-                t,
-                y,
-                actuation_args,
-            )
-            _, qdd = jnp.split(yd, 2)
-            inverse_dynamics_tangent = robot.inverse_dynamics_state_pushforward(
-                q,
-                qd,
-                qdd,
-                q_tangent[:, None],
-                qd_tangent[:, None],
-            )[:, 0]
-        else:
-            (
-                mass_matrix,
-                coriolis_qd,
-                gravity_force,
-                mass_matrix_tangent,
-                coriolis_qd_tangent,
-                gravity_force_tangent,
-            ) = robot._dynamics_terms_with_state_pushforward(
-                q,
-                qd,
-                q_tangent,
-                qd_tangent,
-            )
-            applied_force = (
-                robot.actuation_force(q, u, qd=qd, backend="jax")
-                + tau_ext
-                - robot.elastic_force(q)
-                - robot.damping_matrix(q) @ qd
-            )
-            qdd = robot._solve_inertia(
-                mass_matrix,
-                applied_force - coriolis_qd - gravity_force,
-            )
-            yd = jnp.concatenate([qd, qdd])
-            inverse_dynamics_tangent = (
-                mass_matrix_tangent @ qdd + coriolis_qd_tangent + gravity_force_tangent
-            )
-
-        if y_tangent is None:
-            applied_force_tangent = jnp.zeros_like(q)
-        else:
-            applied_force_tangent = (
-                -robot.K_active @ q_tangent - robot.D_active @ qd_tangent
-            )
-            applied_force_tangent = (
-                applied_force_tangent
-                + robot._actuation_force_state_pushforward(q, u, q_tangent)
-                + robot._passive_force_state_pushforward(
-                    q,
-                    qd,
-                    q_tangent,
-                    qd_tangent,
-                )
-            )
-        if u_has_tangent:
-            applied_force_tangent = (
-                applied_force_tangent
-                + robot.actuation_matrix(q, backend="jax") @ u_tangent
-            )
-        if tau_ext_has_tangent:
-            applied_force_tangent = applied_force_tangent + tau_ext_tangent
-
-        if robot_has_tangent:
-
-            def dynamics_residual(robot_value: "PCS") -> Array:
-                mass_matrix_value, coriolis_qd, gravity_force = (
-                    robot_value.dynamics_terms(q, qd, backend="jax")
-                )
-                inverse_dynamics = mass_matrix_value @ qdd + coriolis_qd + gravity_force
-                applied_force = (
-                    robot_value.actuation_force(q, u, qd=qd, backend="jax")
-                    + tau_ext
-                    - robot_value.elastic_force(q)
-                    - robot_value.damping_matrix(q) @ qd
-                )
-                return applied_force - inverse_dynamics
-
-            _, robot_parameter_rhs_tangent = eqx.filter_jvp(
-                dynamics_residual,
-                (robot,),
-                (robot_tangent,),
-            )
-        else:
-            robot_parameter_rhs_tangent = jnp.zeros_like(q)
-
-        qdd_tangent = robot._solve_inertia(
-            mass_matrix,
-            applied_force_tangent
-            + robot_parameter_rhs_tangent
-            - inverse_dynamics_tangent,
-        )
-        yd_tangent = jnp.concatenate([qd_tangent, qdd_tangent])
-        return yd, yd_tangent
+        """Compose state, input, and parameter actions with one factorization."""
+        return _derivatives.forward_dynamics_jvp(primals, tangents)
 
     @eqx.filter_jit
     def _local_id_jacobian_kinematics(
@@ -5937,6 +5791,10 @@ class PCS(SoftRobot):
         """
         Recurse the composite wrench and its Jacobians from tip to base.
 
+        These derivatives describe inertial effort ``M @ qdd + Cqd + G``.
+        Passive elastic/damping forces are excluded. Differentiate
+        :meth:`inverse_dynamics` for the complete required generalized effort.
+
         At an interval, ``F_res`` is the resultant spatial wrench
         produced by that interval and every interval downstream toward the
         robot tip, transported into the current interval's base frame. It is
@@ -5958,7 +5816,7 @@ class PCS(SoftRobot):
             ``dID/dqdd`` is the generalized inertia matrix and should be
             obtained from the forward-dynamics primal or ``inertia_matrix``.
         """
-        if not self._supports_analytical_dynamics():
+        if not self._supports_analytical_inertia():
 
             def inertial_force(q_value, qd_value):
                 mass, convective, gravity = self.dynamics_terms(
@@ -6162,7 +6020,7 @@ class PCS(SoftRobot):
             The directional inverse-dynamics derivatives with shape
             ``(self.num_velocities, num_directions)``.
         """
-        if not self._supports_analytical_dynamics():
+        if not self._supports_analytical_inertia():
 
             def inertial_force(q_value, qd_value):
                 mass, convective, gravity = self.dynamics_terms(
@@ -6302,6 +6160,26 @@ class PCS(SoftRobot):
             )
         return dID
 
+    def inverse_dynamics(self, q: Array, qd: Array, qdd: Array) -> Array:
+        """Return generalized effort required for the requested acceleration.
+
+        The convention is ``M @ qdd + Cqd + G + elastic + damping @ qd``.
+        This includes passive forces and excludes external applied effort.
+        The result is a generalized force, not actuator controls. Ordinary
+        JAX transformations support state, acceleration, and model parameters.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Velocity, shape ``(num_velocities,)``.
+            qdd: Acceleration, shape ``(num_velocities,)``.
+
+        Returns:
+            Required generalized effort, shape ``(num_velocities,)``.
+        """
+        if custom_jvp_enabled():
+            return _derivatives.inverse_dynamics(self, q, qd, qdd)
+        return _derivatives.inverse_dynamics_reference(self, q, qd, qdd)
+
     @eqx.filter_jit
     def inverse_dynamics_derivatives(
         self,
@@ -6311,6 +6189,10 @@ class PCS(SoftRobot):
     ) -> tuple[Array, Array]:
         """
         Return inverse-dynamics derivatives from the analytical PCS passes.
+
+        This helper describes ``M @ qdd + Cqd + G`` and excludes passive
+        forces. Use JAX transformations of :meth:`inverse_dynamics` when the
+        derivative of the complete required effort is needed.
 
         Args:
             q (Array): Generalized coordinates. Shape is
@@ -6475,6 +6357,7 @@ class PCS(SoftRobot):
         qdd: Array,
         u: Array,
         mass_matrix: Array,
+        factors=None,
     ) -> tuple[Array, Array]:
         """Return state derivatives while reusing an assembled inertia matrix."""
         dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(q, qd, qdd)
@@ -6488,10 +6371,13 @@ class PCS(SoftRobot):
 
         dtau_dq, dtau_dqd = jacfwd(applied_force, argnums=(0, 1))(q, qd)
 
-        dqdd_dq = self._solve_inertia(mass_matrix, dtau_dq - dID_dq)
-        dqdd_dqd = self._solve_inertia(mass_matrix, dtau_dqd - dID_dqd)
-
-        return dqdd_dq, dqdd_dqd
+        factors = (
+            _derivatives.factor_inertia(mass_matrix) if factors is None else factors
+        )
+        derivatives = _derivatives.solve_factored(
+            factors, jnp.concatenate((dtau_dq - dID_dq, dtau_dqd - dID_dqd), axis=1)
+        )
+        return derivatives[:, : q.size], derivatives[:, q.size :]
 
     @eqx.filter_jit
     def forward_dynamics_input_derivatives(
@@ -6530,18 +6416,25 @@ class PCS(SoftRobot):
         mass_matrix: Array,
         u: Array | None = None,
         qd: Array | None = None,
+        factors=None,
     ) -> tuple[Array, Array]:
         """Return input derivatives while reusing an assembled inertia matrix."""
-        dqdd_du = self._solve_inertia(
-            mass_matrix,
-            self.actuation_force_derivative_u(q, u, qd),
+        factors = (
+            _derivatives.factor_inertia(mass_matrix) if factors is None else factors
         )
-        dqdd_dtau_ext = self._solve_inertia(
-            mass_matrix,
-            jnp.eye(self.num_velocities, dtype=q.dtype),
+        derivatives = _derivatives.solve_factored(
+            factors,
+            jnp.concatenate(
+                (
+                    self.actuation_force_derivative_u(q, u, qd),
+                    jnp.eye(self.num_velocities, dtype=q.dtype),
+                ),
+                axis=1,
+            ),
         )
-
-        return dqdd_du, dqdd_dtau_ext
+        return derivatives[:, : self.num_actuators], derivatives[
+            :, self.num_actuators :
+        ]
 
     @eqx.filter_jit
     def forward_dynamics_state_jacobian(
@@ -6586,7 +6479,7 @@ class PCS(SoftRobot):
         if tau_ext is None:
             tau_ext = jnp.zeros((q.shape[0],), dtype=q.dtype)
 
-        yd, mass_matrix = self._forward_dynamics_with_inertia(
+        yd, mass_matrix, factors = self._forward_dynamics_with_factors(
             t,
             y,
             (u, tau_ext),
@@ -6598,6 +6491,7 @@ class PCS(SoftRobot):
             qdd,
             u,
             mass_matrix,
+            factors,
         )
 
         eye = jnp.eye(self.num_velocities, dtype=q.dtype)
@@ -6669,7 +6563,7 @@ class PCS(SoftRobot):
         if tau_ext is None:
             tau_ext = jnp.zeros((q.shape[0],), dtype=q.dtype)
 
-        yd, mass_matrix = self._forward_dynamics_with_inertia(
+        yd, mass_matrix, factors = self._forward_dynamics_with_factors(
             t,
             y,
             (u, tau_ext),
@@ -6681,9 +6575,10 @@ class PCS(SoftRobot):
             qdd,
             u,
             mass_matrix,
+            factors,
         )
         dqdd_du, dqdd_dtau_ext = self._forward_dynamics_input_derivatives_with_inertia(
-            q, mass_matrix, u, qd
+            q, mass_matrix, u, qd, factors
         )
 
         eye = jnp.eye(self.num_velocities, dtype=q.dtype)

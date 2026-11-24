@@ -385,6 +385,30 @@ def make_kinematics_evaluators(
     return scalar_evaluator, abscissa_batched_evaluator
 
 
+def _dynamics_terms_jvp(primals, tangents):
+    """Select an analytical term action or differentiate the current equations."""
+    model, _, _ = primals
+    hook = getattr(model, "_analytical_dynamics_terms_jvp", None)
+    if hook is not None:
+        result = hook(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(
+        lambda model, q, qd: model._assemble_dynamics_terms(q, qd),
+        primals,
+        tangents,
+    )
+
+
+@eqx.filter_custom_jvp
+def evaluate_jax_dynamics_terms(model, q, qd):
+    """JAX term assembly with the same derivative hook as the Warp boundary."""
+    return model._assemble_dynamics_terms(q, qd)
+
+
+evaluate_jax_dynamics_terms.def_jvp(_dynamics_terms_jvp)
+
+
 def make_dynamics_evaluator(
     execute_batch: BatchExecutor, *, family_name: str
 ) -> DynamicsEvaluator:
@@ -394,9 +418,9 @@ def make_dynamics_evaluator(
     does not replicate batch-one executor launches: the custom batching rule
     moves the mapped axis into a single call to ``execute_batch``. Applying
     forward- or reverse-mode differentiation replaces the forward-only executor
-    with ``model._assemble_dynamics_terms`` and differentiates that JAX
-    implementation. This is an execution-routing rule, not an alternative
-    analytical dynamics derivative.
+    with the model's optional analytical term action, or autodiff through
+    ``model._assemble_dynamics_terms`` when no action is supplied. Both routes
+    avoid differentiating a forward-only executor.
 
     Args:
         execute_batch: Family implementation accepting ``q`` and ``qd`` with
@@ -489,11 +513,7 @@ def make_dynamics_evaluator(
             JAX-backed primal terms and their directional derivatives.
         """
 
-        return eqx.filter_jvp(
-            lambda model, q, qd: model._assemble_dynamics_terms(q, qd),
-            primals,
-            tangents,
-        )
+        return _dynamics_terms_jvp(primals, tangents)
 
     return evaluate_terms
 

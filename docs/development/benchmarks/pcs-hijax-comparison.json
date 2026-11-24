@@ -1,0 +1,81 @@
+{
+  "jax_version": "0.12.1",
+  "results": {
+    "cpu": [
+      {
+        "workload": "state_jvp",
+        "ordinary_s": 3.510864917188883e-05,
+        "hijax_s": 5.538295954465866e-05,
+        "speedup": 0.6339251181327459,
+        "error": 0.0,
+        "ordinary_buffers": 19064,
+        "hijax_buffers": 19064
+      },
+      {
+        "workload": "mixed_jvp",
+        "ordinary_s": 3.624975215643644e-05,
+        "hijax_s": 3.762516425922513e-05,
+        "speedup": 0.9634443561943664,
+        "error": 0.0,
+        "ordinary_buffers": 20920,
+        "hijax_buffers": 20920
+      },
+      {
+        "workload": "mixed_vjp",
+        "ordinary_s": 8.380400249734521e-05,
+        "hijax_s": 8.351635187864304e-05,
+        "speedup": 1.0034442431000836,
+        "error": 0.0,
+        "ordinary_buffers": 49392,
+        "hijax_buffers": 49392
+      },
+      {
+        "workload": "directions",
+        "ordinary_s": 4.805540665984154e-05,
+        "hijax_s": 4.811903927475214e-05,
+        "speedup": 0.99867760005458,
+        "error": 0.0,
+        "ordinary_buffers": 54440,
+        "hijax_buffers": 54440
+      }
+    ],
+    "gpu": [
+      {
+        "workload": "state_jvp",
+        "ordinary_s": 0.00016856139991432427,
+        "hijax_s": 0.00016035708831623196,
+        "speedup": 1.0511627623339794,
+        "error": 0.0,
+        "ordinary_buffers": 29456,
+        "hijax_buffers": 29456
+      },
+      {
+        "workload": "mixed_jvp",
+        "ordinary_s": 0.00021680935751646757,
+        "hijax_s": 0.00021953689865767957,
+        "speedup": 0.9875759329848919,
+        "error": 0.0,
+        "ordinary_buffers": 36648,
+        "hijax_buffers": 36648
+      },
+      {
+        "workload": "mixed_vjp",
+        "ordinary_s": 0.0002966877538710833,
+        "hijax_s": 0.0002949284506030381,
+        "speedup": 1.0059651866900192,
+        "error": 0.0,
+        "ordinary_buffers": 60824,
+        "hijax_buffers": 60824
+      },
+      {
+        "workload": "directions",
+        "ordinary_s": 0.00018532670801505444,
+        "hijax_s": 0.00018808124586939813,
+        "speedup": 0.9853545320714411,
+        "error": 0.0,
+        "ordinary_buffers": 54600,
+        "hijax_buffers": 54600
+      }
+    ]
+  }
+}
