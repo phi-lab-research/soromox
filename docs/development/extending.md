@@ -409,6 +409,9 @@ def total_energy(self, q: jax.Array, qd: jax.Array) -> jax.Array:
 
 #### 7. Autodiff and analytical custom JVPs
 
+Autodiff is the package default. Analytical derivative hooks are optional
+optimizations selected only after an explicit opt-in before tracing.
+
 Public methods use shared transformation adapters in
 `execution/transforms.py`. These adapters select analytical model hooks or JAX
 AD of protected primal methods. Users keep calling ordinary JAX transformations;

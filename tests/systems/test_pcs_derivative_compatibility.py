@@ -60,6 +60,7 @@ def _inputs(model):
 
 
 @pytest.mark.parametrize("kind", ["floating", "inertia", "friction"])
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_extended_physics_preserves_dynamics_derivatives(kind):
     model = _model(kind)
     assert not model._supports_analytical_dynamics()
@@ -91,6 +92,7 @@ def test_extended_physics_preserves_dynamics_derivatives(kind):
     jax.clear_caches()
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_input_and_external_tangents_skip_state_recurrence(monkeypatch):
     model = _model()
     y, u, force = _inputs(model)
@@ -119,3 +121,48 @@ def test_forward_dynamics_validates_explicit_backend():
     y, u, force = _inputs(model)
     with pytest.raises(ValueError):
         model.forward_dynamics(0.0, y, (u, force), backend="invalid")
+
+
+@pytest.mark.parametrize("operation", ["forward", "inverse", "terms"])
+def test_unconfigured_dynamics_use_autodiff(operation, monkeypatch):
+    from soromox import custom_jvp_enabled
+    from soromox.systems.pcs import _derivatives
+
+    assert custom_jvp_enabled() is False
+    model = _model()
+    y, u, force = _inputs(model)
+    q, v = model.split_state(y)[:2]
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("default mode entered analytical dynamics composition")
+
+    for name in ("terms_jvp", "forward_dynamics_jvp", "inverse_dynamics_jvp"):
+        monkeypatch.setattr(_derivatives, name, forbidden)
+    point = y if operation == "forward" else q
+
+    def output(x, public):
+        if operation == "forward":
+            fn = model.forward_dynamics if public else model._forward_dynamics
+            return fn(0.0, x, (u, force))
+        if operation == "inverse":
+            fn = model.inverse_dynamics if public else model._inverse_dynamics
+            return fn(x, v, v)
+        fn = model.dynamics_terms if public else model._assemble_dynamics_terms
+        return fn(x, v)
+
+    def public(x):
+        return output(x, True)
+
+    def raw(x):
+        return output(x, False)
+
+    for transform in (jax.jacfwd, jax.jacrev):
+        actual, expected = (
+            jax.jit(transform(public))(point),
+            jax.jit(transform(raw))(point),
+        )
+        for a, b in zip(
+            jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True
+        ):
+            assert_allclose(a, b, rtol=1e-7, atol=1e-8)
+    jax.clear_caches()

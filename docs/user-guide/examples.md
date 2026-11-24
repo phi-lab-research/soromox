@@ -12,8 +12,9 @@ This page provides a comprehensive overview of the example scripts included with
 
 ## Overview
 
-SoRoMoX examples are organized into two main categories:
+SoRoMoX examples are organized by topic:
 
+- **[Differentiation Examples](#differentiation-examples)** - Default autodiff and explicit custom-rule opt-in
 - **[Simulation Examples](#simulation-examples)** - Dynamic simulations of various robot systems
 - **[Control Examples](#control-examples)** - Control algorithms for different control spaces
 
@@ -22,6 +23,23 @@ application studies are catalogued in the separate
 [paper experiments repository](https://github.com/phi-lab-research/soromox-paper-experiments/blob/main/paper_results/README.md).
 
 ---
+
+## Differentiation Examples
+
+The headless `examples/differentiation/derivative_modes.py` example computes a
+state JVP for a 16-segment, full-strain PCS model. It uses autodiff by default:
+
+```bash
+python examples/differentiation/derivative_modes.py
+```
+
+For the recommended CPU custom-derivative workload, opt in before compilation:
+
+```bash
+JAX_PLATFORMS=cpu python examples/differentiation/derivative_modes.py --custom-derivatives
+```
+
+See [Differentiation](differentiation.md) for mode selection and model support.
 
 ## Simulation Examples
 

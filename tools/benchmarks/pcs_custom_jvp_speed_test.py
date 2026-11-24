@@ -45,7 +45,11 @@ import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
 from soromox.actuation import ThreadlikeActuator, ThreadlikeRouting  # noqa: E402
-from soromox.autodiff import set_custom_jvp_enabled  # noqa: E402
+from soromox.autodiff import (  # noqa: E402
+    custom_jvp_enabled,
+    custom_jvp_mode,
+    set_custom_jvp_enabled,
+)
 from soromox.systems import (  # noqa: E402
     PCS,
     IsotropicMaterialParams,
@@ -545,7 +549,7 @@ def difference(reference: Tree, candidate: Tree) -> tuple[float, float]:
     return max_absolute, max_relative
 
 
-def run(args: argparse.Namespace) -> list[dict[str, Any]]:
+def _run(args: argparse.Namespace) -> list[dict[str, Any]]:
     """Execute every requested PCS custom-JVP benchmark pair."""
     rows: list[dict[str, Any]] = []
     device = jax.devices()[0]
@@ -639,8 +643,16 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                     flush=True,
                 )
 
-    set_custom_jvp_enabled(True)
     return rows
+
+
+def run(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Compare modes and restore the caller's setting, including on failure."""
+    try:
+        with custom_jvp_mode(custom_jvp_enabled()):
+            return _run(args)
+    finally:
+        jax.clear_caches()
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

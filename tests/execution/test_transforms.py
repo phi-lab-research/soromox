@@ -196,6 +196,7 @@ def test_dynamics_evaluator_uses_jax_for_forward_and_reverse_derivatives() -> No
     assert_allclose(actual_gradient, expected_gradient, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_kinematics_evaluator_preserves_model_tangent() -> None:
     """Differentiate model leaves through the accelerated pose adapter."""
 

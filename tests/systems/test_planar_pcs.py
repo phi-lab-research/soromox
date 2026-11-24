@@ -1387,6 +1387,7 @@ def test_planar_pcs_arc_length_derivatives_match_autodiff() -> None:
         )
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_planar_pcs_custom_jvps_include_arc_length_derivative() -> None:
     model, _ = make_planar_pcs(num_segments=2)
     q = random_q(model, jax.random.PRNGKey(2030), scale=0.03)

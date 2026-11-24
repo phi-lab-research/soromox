@@ -22,9 +22,21 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Breaking changes
 
+- Ordinary JAX transformations of system methods now use autodiff by default
+  on CPU and GPU. To opt into optional analytical derivatives, use
+  `custom_jvp_mode(True)` or `set_custom_jvp_enabled(True)` before tracing.
+  Existing compiled functions retain their traced mode. Explicit analytical
+  helpers, numerical-safety rules, and implicit-solver derivative definitions
+  keep their algorithms. See [Differentiation](../user-guide/differentiation.md)
+  for workload recommendations and migration examples.
+
 ### Fixed
 
 ### Documentation
+
+- Added differentiation recommendations and analytical-support tables covering
+  kinematics, dynamics, and energies, plus a runnable example of default
+  autodiff and explicit analytical opt-in.
 
 ### Contributors
 

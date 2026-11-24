@@ -76,6 +76,7 @@ def test_benchmark_custom_jvp_matches_direct_jax_autodiff() -> None:
     _assert_trees_allclose(reference, candidate)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_custom_jvp_input_only_tangent_matches_direct_jax_autodiff() -> None:
     """Cover the custom rule's no-state-tangent inertia-matrix branch."""
     model = benchmark.build_model("threadlike", num_segments=2, gauss_points=5)
@@ -187,6 +188,7 @@ def test_large_dense_directional_jvp_matches_direct_jax_autodiff() -> None:
         pytest.param((None,), id="default-input"),
     ],
 )
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_custom_jvp_state_tangent_accepts_optional_inputs(
     actuation_args: tuple | None,
 ) -> None:

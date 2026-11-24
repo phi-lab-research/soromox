@@ -4,7 +4,8 @@ Both flags are read by public APIs at trace time. Jitted functions capture the
 Python value when they are traced, so change a flag before tracing or retrace
 after changing it.
 
-- ``custom_jvp_enabled`` controls optional analytical derivative dispatch when
+- ``custom_jvp_enabled`` is false by default: ordinary JAX autodiff is used.
+  Enable it before tracing to opt into optional analytical derivative dispatch when
   applying JAX transformations to system methods, including shared execution
   boundaries. Explicit analytical helpers retain their requested algorithms.
   Numerical safety and implicit-solver derivative definitions remain active.
@@ -34,17 +35,17 @@ __all__ = [
     "set_strict_singularities",
 ]
 
-_CUSTOM_JVP_ENABLED = True
+_CUSTOM_JVP_ENABLED = False
 _STRICT_SINGULARITIES = False
 
 
 def custom_jvp_enabled() -> bool:
-    """Return whether public APIs should use registered custom JVP rules."""
+    """Return whether optional analytical rules are enabled (default: False)."""
     return _CUSTOM_JVP_ENABLED
 
 
 def set_custom_jvp_enabled(enabled: bool) -> None:
-    """Set whether public APIs should use registered custom JVP rules."""
+    """Opt into optional analytical rules before tracing; False selects autodiff."""
     global _CUSTOM_JVP_ENABLED
     _CUSTOM_JVP_ENABLED = bool(enabled)
 

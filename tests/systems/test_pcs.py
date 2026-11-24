@@ -1106,6 +1106,7 @@ def _strict_interior_arc_lengths(model: PCS) -> jnp.ndarray:
     return (model.L_cum[:-1, None] + model.L[:, None] * fractions).reshape(-1)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_custom_jvp_primal_methods_match_protected_hooks() -> None:
     model, _ = make_pcs(num_segments=2)
     q = random_q(model, jax.random.PRNGKey(1), scale=0.03)
@@ -1118,6 +1119,7 @@ def test_pcs_custom_jvp_primal_methods_match_protected_hooks() -> None:
     assert_allclose(model.gravitational_energy(q), model._gravitational_energy(q))
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_forward_kinematics_jvp_uses_protected_primal_autodiff() -> None:
     model = _sentinel_pcs_model(_SentinelJacobianOnlyPCS)
     q = random_q(model, jax.random.PRNGKey(2), scale=0.02)
@@ -1132,6 +1134,7 @@ def test_pcs_forward_kinematics_jvp_uses_protected_primal_autodiff() -> None:
     assert_allclose(posed, expected_posed, rtol=RTOL, atol=ATOL)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_forward_kinematics_jvp_uses_arc_length_pair_hook() -> None:
     model = _sentinel_pcs_model(_SentinelForwardKinematicsArcLengthJVPPCS)
     q = random_q(model, jax.random.PRNGKey(2034), scale=0.02)
@@ -1143,6 +1146,7 @@ def test_pcs_forward_kinematics_jvp_uses_arc_length_pair_hook() -> None:
     assert_allclose(posed, jnp.full_like(posed, 0.375) * sd, rtol=RTOL, atol=ATOL)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_jacobian_jvp_uses_analytical_time_derivative_hook() -> None:
     model = _sentinel_pcs_model(_SentinelJacobianJVPPCS)
     q = random_q(model, jax.random.PRNGKey(4), scale=0.02)
@@ -1155,6 +1159,7 @@ def test_pcs_jacobian_jvp_uses_analytical_time_derivative_hook() -> None:
     assert_allclose(Jd, expected_Jd, rtol=RTOL, atol=ATOL)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_jacobian_jvp_uses_arc_length_pair_hook() -> None:
     model = _sentinel_pcs_model(_SentinelJacobianArcLengthJVPPCS)
     q = random_q(model, jax.random.PRNGKey(2035), scale=0.02)
@@ -1166,6 +1171,7 @@ def test_pcs_jacobian_jvp_uses_arc_length_pair_hook() -> None:
     assert_allclose(Jd, jnp.full_like(Jd, 0.25) * sd, rtol=RTOL, atol=ATOL)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_jacobian_mixed_jvp_uses_protected_primal_autodiff() -> None:
     model = _sentinel_pcs_model(_SentinelJacobianOnlyPCS)
     q = random_q(model, jax.random.PRNGKey(2036), scale=0.02)
@@ -1193,6 +1199,7 @@ def test_pcs_gravitational_energy_grad_uses_scalar_energy_autodiff() -> None:
     assert_allclose(dU_dq, expected, rtol=RTOL, atol=ATOL)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_custom_jvps_match_real_analytical_methods() -> None:
     model, _ = make_pcs(num_segments=2)
     q = random_q(model, jax.random.PRNGKey(7), scale=0.03)
@@ -1243,6 +1250,7 @@ def test_pcs_arc_length_derivatives_match_autodiff() -> None:
         )
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_custom_jvps_include_arc_length_derivative() -> None:
     model, _ = make_pcs(num_segments=2)
     q = random_q(model, jax.random.PRNGKey(2030), scale=0.03)
@@ -1652,6 +1660,7 @@ def test_forward_dynamics_disabled_custom_jvp_uses_autodiff_primal() -> None:
     assert_allclose(actual, expected, rtol=RTOL, atol=ATOL)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_forward_dynamics_custom_jvp_includes_model_parameter_tangent() -> None:
     selector = jnp.array([False, False, False, True, False, False], dtype=bool)
     model, _ = make_pcs(
@@ -2553,6 +2562,7 @@ def test_reverse_mode_of_vmap_at_zero_configuration() -> None:
     assert not jnp.isnan(coriolis).any(), "d(vmap(coriolis_matrix))/dq contains NaN!"
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_reverse_mode_of_vmap_over_jacobian_mixed_jvp_at_zero_configuration() -> None:
     """The Jacobian custom-JVP mixed fallback stays finite in a batched reverse pass."""
     model, _ = make_pcs(num_segments=1, total_length=PCS_TOTAL_LENGTH)
@@ -2579,6 +2589,7 @@ def test_reverse_mode_of_vmap_over_jacobian_mixed_jvp_at_zero_configuration() ->
     assert jnp.isfinite(grad).all(), "d(vmap(jvp(jacobian, q, s)))/dq contains NaN!"
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_reverse_mode_of_vmap_over_energy_custom_jvps_at_zero_configuration() -> None:
     """Kinetic and total-energy custom JVPs stay finite in a batched reverse pass."""
     model, _ = make_pcs(num_segments=1, total_length=PCS_TOTAL_LENGTH)
@@ -2627,7 +2638,7 @@ if __name__ == "__main__":
 
 
 @pytest.fixture
-def derivative_case():
+def derivative_case(analytical_derivatives):
     routing = ThreadlikeRouting.linear(
         intercept=jnp.array([[0.0, -0.01, 0.0], [0.0, 0.01, 0.0]]),
         slope=jnp.zeros((2, 3)),

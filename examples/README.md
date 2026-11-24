@@ -8,6 +8,7 @@ where code, input data, and canonical outputs are versioned together.
 
 ```text
 examples/
+├── differentiation/              # autodiff default and explicit custom-rule opt-in
 ├── data/                         # optional inputs shared by multiple topics
 ├── rendering/                    # Open3D and Viser scene presets and comparison gallery
 ├── control/
@@ -45,3 +46,17 @@ Open3D simulation and control examples export trajectory videos through the mode
 renderer to a `videos/` directory beside the script. Static Open3D views also use
 modern rendering. Legacy animation previews are available through the renderer
 API in a fresh process; mixing them with modern GUI windows on macOS is unsupported.
+
+## Differentiation
+
+`python examples/differentiation/derivative_modes.py` computes a PCS state JVP
+using the package's default autodiff. For this large full-strain CPU workload,
+opt in explicitly with:
+
+```bash
+JAX_PLATFORMS=cpu python examples/differentiation/derivative_modes.py --custom-derivatives
+```
+
+The example selects its mode before tracing. See the
+[Differentiation guide](../docs/user-guide/differentiation.md) for recommendations
+covering kinematics, dynamics, and energies.

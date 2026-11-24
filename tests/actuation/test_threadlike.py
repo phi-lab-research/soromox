@@ -224,6 +224,7 @@ def test_threadlike_actuator_and_passive_parameter_updates_compile_once():
     assert_allclose(actual, _threadlike_component_summary(eager, q))
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_pcs_custom_jvp_includes_threadlike_passive_state_tangent():
     actuator, passive = _threadlike_components()
     robot = _spatial_pcs(actuators=actuator, passive_elements=(passive,))

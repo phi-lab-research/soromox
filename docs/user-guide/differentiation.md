@@ -113,27 +113,36 @@ losses and unlisted workloads.
 
 ### Selecting the mode
 
-Select autodiff before tracing application functions:
+**Autodiff is the package default on CPU and GPU.** Ordinary JAX calls need no
+mode configuration:
 
 ```python
-from soromox import set_custom_jvp_enabled
-
-set_custom_jvp_enabled(False)
-# Construct and JIT-compile the application after selecting the mode.
+# Uses autodiff with the default package settings.
+gradient = jax.grad(lambda state: jnp.sum(field(state, u)**2))(y)
 ```
 
-Use `set_custom_jvp_enabled(True)` to enable custom rules. The package currently
-enables them by default. This setting applies on both CPU and GPU. Custom mode
-combines analytical derivatives with autodiff fallbacks for other dependencies.
-
-For a temporary choice, use `custom_jvp_mode`:
+For a workload recommended above, explicitly opt into custom rules before tracing:
 
 ```python
 from soromox import custom_jvp_mode
 
-with custom_jvp_mode(False):
-    gradient = jax.grad(lambda state: jnp.sum(field(state, u)**2))(y)
+with custom_jvp_mode(True):
+    state_jvp = jax.jit(
+        lambda state, direction: jax.jvp(
+            lambda state: field(state, u), (state,), (direction,),
+        )[1]
+    )
+    dydot = state_jvp(y, dy)  # First trace occurs inside the context.
 ```
+
+The context restores the previous mode when it exits, including on exceptions.
+For an application-wide choice, call `set_custom_jvp_enabled(True)` before
+tracing. `set_custom_jvp_enabled(False)` restores autodiff. Custom mode combines
+selected analytical rules with AD fallbacks; it does not force every derivative
+to use an analytical formula.
+
+The runnable [derivative-mode example](examples.md#differentiation-examples)
+shows the default and the explicit opt-in on a PCS state JVP.
 
 The setting is read during tracing. Set it before the first call to a compiled
 function; changing it does not change an existing executable. For independent

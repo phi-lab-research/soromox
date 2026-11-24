@@ -41,7 +41,11 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
-from soromox.autodiff import set_custom_jvp_enabled  # noqa: E402
+from soromox.autodiff import (  # noqa: E402
+    custom_jvp_enabled,
+    custom_jvp_mode,
+    set_custom_jvp_enabled,
+)
 from soromox.systems import SoftRobot  # noqa: E402
 from tools.benchmarks._benchmark_common import (  # noqa: E402
     add_gauss_point_args,
@@ -835,7 +839,7 @@ def _benchmark_context(system: SoftRobot, system_ctx: Mapping[str, Array], args:
     return ctx
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _run(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     system_registry = {
         name: config
@@ -936,8 +940,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         row["max_rel_diff"] = max_rel_diff
                         results.append(row)
 
-    set_custom_jvp_enabled(True)
-
     if args.json is not None:
         _write_json(results, args.json)
     if args.csv is not None:
@@ -946,6 +948,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_markdown_summary(results, args.markdown_summary)
 
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run comparisons while preserving the caller's derivative mode."""
+    try:
+        with custom_jvp_mode(custom_jvp_enabled()):
+            return _run(argv)
+    finally:
+        jax.clear_caches()
 
 
 if __name__ == "__main__":

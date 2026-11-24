@@ -169,20 +169,15 @@ class _ModelTangentDefaultRobot(_PlanarDefaultRobot):
 
 
 def test_custom_jvp_global_toggle_context_manager_restores_state() -> None:
-    set_custom_jvp_enabled(True)
-    assert custom_jvp_enabled()
-
-    with custom_jvp_mode(False):
-        assert not custom_jvp_enabled()
-
-    assert custom_jvp_enabled()
-
-    set_custom_jvp_enabled(False)
-    with custom_jvp_mode(True):
-        assert custom_jvp_enabled()
-
-    assert not custom_jvp_enabled()
-    set_custom_jvp_enabled(True)
+    initial = custom_jvp_enabled()
+    try:
+        for enabled in (False, True):
+            set_custom_jvp_enabled(enabled)
+            with custom_jvp_mode(not enabled):
+                assert custom_jvp_enabled() is not enabled
+            assert custom_jvp_enabled() is enabled
+    finally:
+        set_custom_jvp_enabled(initial)
 
 
 def test_default_length_sums_segment_lengths() -> None:
@@ -403,6 +398,7 @@ def test_default_spatial_jacobian_converts_se3_pose_derivative() -> None:
     assert robot.jacobian_tips(q).shape == (2, 6, 2)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_default_custom_jvp_paths_are_finite_under_grad_of_vmap() -> None:
     """Inherited nested-AD fallback paths remain finite under batched reverse mode."""
     robot = _PlanarDefaultRobot()
@@ -479,6 +475,7 @@ def test_spatial_default_jacobian_fallback_is_finite_without_custom_jvp() -> Non
     assert_allclose(wrapper_disabled_grad, protected_grad, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_spatial_default_jacobian_custom_jvp_is_finite_under_grad_of_vmap() -> None:
     robot = _SpatialLieExpDefaultRobot()
     q = jnp.zeros((6,), dtype=jnp.float64)
@@ -586,6 +583,7 @@ def test_default_coriolis_matrix_is_energy_consistent() -> None:
     assert_allclose(skew + skew.T, jnp.zeros_like(skew), rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_default_energy_custom_jvps_use_force_and_dynamics_terms() -> None:
     robot = _DynamicsTermsEnergyJVPDefaultRobot()
     q = jnp.array([0.2, -0.3], dtype=jnp.float64)
@@ -628,6 +626,7 @@ def test_default_energy_custom_jvps_use_force_and_dynamics_terms() -> None:
     )
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_default_kinetic_energy_custom_jvp_uses_default_dynamics_terms() -> None:
     robot = _PlanarDefaultRobot()
     q = jnp.array([0.2, -0.3], dtype=jnp.float64)
@@ -721,3 +720,45 @@ def test_disabled_base_kinematics_skips_analytical_hooks(operation, monkeypatch)
     for a, b in zip(actual, expected, strict=True):
         assert_allclose(a, b, rtol=1e-10, atol=1e-11)
     jax.clear_caches()
+
+
+@pytest.mark.parametrize(
+    "operation", ["forward_kinematics", "jacobian", "total_energy"]
+)
+@pytest.mark.parametrize("transform", ["jvp", "grad", "jacfwd", "jacrev"])
+def test_unconfigured_transform_uses_autodiff(operation, transform, monkeypatch):
+    assert custom_jvp_enabled() is False
+    robot = _PlanarDefaultRobot()
+    q, v, s = jnp.array([0.2, -0.3]), jnp.array([0.7, -0.4]), jnp.array(0.8)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("default mode entered an optional analytical rule")
+
+    for hook in ("_forward_kinematics_jvp", "_jacobian_jvp", "_analytical_energy_jvp"):
+        monkeypatch.setattr(type(robot), hook, forbidden)
+
+    def output(q, public):
+        fn = getattr(robot, operation if public else f"_{operation}")
+        return fn(q, v if operation == "total_energy" else s)
+
+    def derivative(fn):
+        if transform == "jvp":
+            return jax.jit(lambda q: jax.jvp(fn, (q,), (jnp.ones_like(q),)))(q)
+        if transform == "grad":
+            return jax.jit(jax.grad(lambda q: jnp.sum(fn(q))))(q)
+        return jax.jit(getattr(jax, transform)(fn))(q)
+
+    actual = derivative(lambda q: output(q, True))
+    expected = derivative(lambda q: output(q, False))
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    jax.clear_caches()
+
+
+def test_explicit_analytical_helper_keeps_its_algorithm_by_default():
+    assert custom_jvp_enabled() is False
+    robot = _ToggleSentinelDefaultRobot()
+    pose, pose_s = robot.forward_kinematics_and_arc_length_derivative(
+        jnp.array([0.2, -0.3]), jnp.array(0.8)
+    )
+    assert_allclose(pose_s, jnp.full_like(pose, 0.375))
