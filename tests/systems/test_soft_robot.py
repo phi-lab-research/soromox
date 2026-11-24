@@ -1,13 +1,28 @@
 """Unit tests for shared :class:`soromox.systems.SoftRobot` contracts."""
 
-import jax
 import equinox as eqx
+import jax
 import pytest
 from jax import numpy as jnp
 from numpy.testing import assert_allclose
-from system_param_builders import pcs_params, planar_pcs_params
+from system_param_builders import (
+    gvs_params_from_segments,
+    pcs_params,
+    planar_pcs_params,
+)
 
-from soromox.systems import PCS, PCSStructure, PlanarPCS, PlanarPCSStructure
+from soromox.systems import (
+    GVS,
+    PCS,
+    GVSSegment,
+    JointSpec,
+    LinkSpec,
+    PCSStructure,
+    PlanarPCS,
+    PlanarPCSStructure,
+    StrainBasisSpec,
+    _dynamics,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -173,9 +188,7 @@ def test_fixed_mount_update_and_public_state_projection() -> None:
     assert_allclose(projected_q[4:], q[4:])
     assert_allclose(projected_v, v)
     assert projected_auxiliary.shape == (0,)
-    assert_allclose(
-        floating.base_transform_from_configuration(q)[:3, 3], base_pose[4:]
-    )
+    assert_allclose(floating.base_transform_from_configuration(q)[:3, 3], base_pose[4:])
 
     fixed = _spatial_robot(floating_base=False).with_fixed_base_pose(base_pose)
     assert_allclose(fixed.fixed_base_pose, base_pose)
@@ -184,3 +197,87 @@ def test_fixed_mount_update_and_public_state_projection() -> None:
     )
     with pytest.raises(ValueError, match="has no fixed base pose"):
         floating.with_fixed_base_pose(base_pose)
+
+
+def _gvs_robot(*, floating_base: bool) -> GVS:
+    params, structure = gvs_params_from_segments(
+        [
+            GVSSegment(
+                link=LinkSpec.circular(
+                    length=0.1,
+                    radius=0.01,
+                    density=1000.0,
+                    young_modulus=1e5,
+                    shear_modulus=4e4,
+                    reference_strain=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                ),
+                joint=JointSpec(type="fixed"),
+                basis=StrainBasisSpec(
+                    type="monomial", strain_selector=[1] * 6, basis_order=[0] * 6
+                ),
+                num_gauss_points=5,
+            )
+        ],
+        gravity=jnp.array([0.0, 0.0, -9.81]),
+    )
+    return GVS(
+        params=params, structure=structure, floating_base=floating_base, backend="jax"
+    )
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("floating_base", [False, True])
+def test_required_effort_and_shared_derivative_composition(factory, floating_base):
+    robot = factory(floating_base=floating_base)
+    base_pose = None
+    if floating_base:
+        base_pose = (
+            jnp.array([0.1, -0.1, 0.2])
+            if robot.num_base_coordinates == 3
+            else jnp.array([0.1, -0.1, 0.2, 1.0, 0.0, 0.0, 0.0])
+        )
+    q = robot.pack_configuration(
+        jnp.linspace(-0.02, 0.03, robot.num_internal_dofs), base_pose=base_pose
+    )
+    v = jnp.linspace(-0.02, 0.04, robot.num_velocities)
+    a = jnp.linspace(0.01, 0.03, robot.num_velocities)
+    dq, dv, da = jnp.full_like(q, 0.01), jnp.full_like(v, 0.02), jnp.full_like(a, 0.03)
+    effort = robot.inverse_dynamics(q, v, a)
+    assert_allclose(
+        robot.passive_force(q, v), robot.elastic_force(q) + robot.damping_matrix(q) @ v
+    )
+    y = robot.pack_state(q, v)
+    result = robot.forward_dynamics(0.0, y, (jnp.zeros(robot.num_actuators), effort))
+    assert_allclose(robot.split_state(result)[1], a, rtol=1e-6, atol=1e-8)
+    expected = jax.jit(
+        lambda q, v, a: jax.jvp(robot._inverse_dynamics, (q, v, a), (dq, dv, da))
+    )(q, v, a)
+    actual = jax.jit(
+        lambda q, v, a: jax.jvp(robot.inverse_dynamics, (q, v, a), (dq, dv, da))
+    )(q, v, a)
+    shared = eqx.filter_jit(_dynamics.inverse_dynamics_jvp)(
+        (robot, q, v, a), (jax.tree.map(lambda _: None, robot), dq, dv, da)
+    )
+    for candidate in (actual, shared):
+        for value, reference in zip(candidate, expected, strict=True):
+            assert_allclose(value, reference, rtol=1e-6, atol=1e-8)
+    cotangent = jnp.linspace(0.1, 0.2, robot.num_velocities)
+    actual_vjp = jax.jit(
+        lambda q, v, a: jax.vjp(robot.inverse_dynamics, q, v, a)[1](cotangent)
+    )(q, v, a)
+    expected_vjp = jax.jit(
+        lambda q, v, a: jax.vjp(robot._inverse_dynamics, q, v, a)[1](cotangent)
+    )(q, v, a)
+    for actual, expected in zip(actual_vjp, expected_vjp, strict=True):
+        assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+    args = (jnp.zeros(robot.num_actuators), effort)
+    dy = robot.pack_state(dq, dv)
+    expected = eqx.filter_jit(
+        lambda y: jax.jvp(lambda y: robot._forward_dynamics(0.0, y, args), (y,), (dy,))
+    )(y)
+    actual = eqx.filter_jit(_dynamics.forward_dynamics_jvp)(
+        (robot, 0.0, y, args), (jax.tree.map(lambda _: None, robot), None, dy, None)
+    )
+    for value, reference in zip(actual, expected, strict=True):
+        assert_allclose(value, reference, rtol=1e-6, atol=1e-8)
+    jax.clear_caches()

@@ -596,6 +596,26 @@ def make_dynamics_actuation_evaluator(
 
 
 @eqx.filter_custom_jvp
+def evaluate_inverse_dynamics(model, q, qd, qdd):
+    """Evaluate required effort through the model's JAX assembly."""
+    return model._inverse_dynamics(q, qd, qdd)
+
+
+@evaluate_inverse_dynamics.def_jvp
+def _evaluate_inverse_dynamics_jvp(primals, tangents):
+    hook = getattr(primals[0], "_analytical_inverse_dynamics_jvp", None)
+    if hook is not None:
+        result = hook(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(
+        lambda model, q, qd, qdd: model._inverse_dynamics(q, qd, qdd),
+        primals,
+        tangents,
+    )
+
+
+@eqx.filter_custom_jvp
 def evaluate_forward_dynamics(
     model: ForwardDynamicsModel,
     t: Array,
@@ -801,6 +821,7 @@ __all__ = [
     "DynamicsActuationBatchExecutor",
     "KinematicsBatchExecutor",
     "evaluate_forward_dynamics",
+    "evaluate_inverse_dynamics",
     "make_actuation_evaluator",
     "make_dynamics_evaluator",
     "make_dynamics_actuation_evaluator",

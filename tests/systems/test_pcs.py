@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import equinox as eqx
 import jax
 import numpy as onp
@@ -7,9 +9,22 @@ from jax import numpy as jnp
 from numpy.testing import assert_allclose
 from system_param_builders import pcs_params, spatial_base_pose
 
+from soromox.actuation import (
+    EffortModel,
+    ThreadlikeActuator,
+    ThreadlikeImpedance,
+    ThreadlikeRouting,
+)
 from soromox.autodiff import custom_jvp_mode
 from soromox.execution import PCSBackendParams
-from soromox.systems import PCS, CrossSectionGeometry, PCSStructure
+from soromox.systems import (
+    PCS,
+    CrossSectionGeometry,
+    IsotropicMaterialParams,
+    LinkSpec,
+    PCSStructure,
+)
+from soromox.systems.pcs import _derivatives
 from soromox.utils.integration import scale_interior_gaussian_quadrature
 from soromox.utils.lie_algebra import se3
 from soromox.utils.tolerance import Tolerance
@@ -1443,7 +1458,7 @@ def test_inverse_dynamics_jacobian_passes_match_autodiff(
         inertia, coriolis_qd, gravity = model.dynamics_terms(q_, qd_)
         return inertia @ qdd_ + coriolis_qd + gravity
 
-    dID_dq, dID_dqd = model.inverse_dynamics_backward_pass(q, qd, qdd)
+    dID_dq, dID_dqd = model._inertial_force_jacobians(q, qd, qdd)
     mass_matrix = model.inertia_matrix(q)
     expected_dID_dq = jacfwd(lambda q_: inverse_dynamics_force(q_, qd, qdd))(q)
     expected_dID_dqd = jacfwd(lambda qd_: inverse_dynamics_force(q, qd_, qdd))(qd)
@@ -1455,7 +1470,7 @@ def test_inverse_dynamics_jacobian_passes_match_autodiff(
 
     q_directions = jnp.stack((qd, tau_ext), axis=1)
     qd_directions = jnp.stack((qdd, q), axis=1)
-    directional_dID = model.inverse_dynamics_state_pushforward(
+    directional_dID = model._inertial_force_state_pushforward(
         q,
         qd,
         qdd,
@@ -1470,7 +1485,7 @@ def test_inverse_dynamics_jacobian_passes_match_autodiff(
     )
 
     zero_q = jnp.zeros_like(q)
-    zero_results = model.inverse_dynamics_backward_pass(zero_q, qd, qdd)
+    zero_results = model._inertial_force_jacobians(zero_q, qd, qdd)
     zero_expected_dID_dq = jacfwd(lambda q_: inverse_dynamics_force(q_, qd, qdd))(
         zero_q
     )
@@ -1493,20 +1508,6 @@ def test_inverse_dynamics_jacobian_passes_match_autodiff(
     assert_allclose(
         state_jacobian,
         expected_state_jacobian,
-        rtol=RTOL,
-        atol=ATOL,
-    )
-
-    inverse_dynamics_derivatives = model.inverse_dynamics_derivatives(q, qd, qdd)
-    assert_allclose(
-        inverse_dynamics_derivatives[0],
-        expected_dID_dq,
-        rtol=RTOL,
-        atol=ATOL,
-    )
-    assert_allclose(
-        inverse_dynamics_derivatives[1],
-        expected_dID_dqd,
         rtol=RTOL,
         atol=ATOL,
     )
@@ -1666,8 +1667,7 @@ def test_forward_dynamics_custom_jvp_includes_model_parameter_tangent() -> None:
     def dynamics(density_value: Array, *, use_custom_jvp: bool) -> Array:
         updated = model.update_link_params(density=density_value)
         if use_custom_jvp:
-            return PCS._forward_dynamics_custom_jvp(
-                updated,
+            return updated.forward_dynamics(
                 jnp.array(0.0),
                 y,
                 (u, tau_ext),
@@ -2623,3 +2623,301 @@ def test_reverse_mode_of_vmap_over_forward_kinematics_at_zero_configuration() ->
 if __name__ == "__main__":
     # run pytest with activated stdout
     pytest.main([__file__])
+
+
+@pytest.fixture
+def derivative_case():
+    routing = ThreadlikeRouting.linear(
+        intercept=jnp.array([[0.0, -0.01, 0.0], [0.0, 0.01, 0.0]]),
+        slope=jnp.zeros((2, 3)),
+        start_segment_index=(0, 0),
+        end_segment_index=(0, 0),
+    )
+    model = PCS.from_links(
+        [
+            LinkSpec.circular(
+                length=0.1,
+                radius=0.02,
+                density=1070.0,
+                young_modulus=2000.0,
+                shear_modulus=1000.0,
+                material_damping_coefficient=0.001,
+                reference_strain=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            )
+        ],
+        gravity=jnp.array([0.0, 0.0, -9.81]),
+        structure=PCSStructure(
+            num_gauss_points=3,
+            strain_selector=jnp.array([False, False, True, True, False, False]),
+        ),
+        actuators=ThreadlikeActuator.tendons(routing),
+        backend="jax",
+    )
+    inputs = SimpleNamespace(
+        y=jnp.array([-0.025, 0.035, 0.04, -0.03]),
+        y_direction=jnp.linspace(-0.2, 0.25, 4),
+        u=jnp.array([0.05, 0.1]),
+        u_direction=jnp.array([-0.15, 0.2]),
+        tau_ext=jnp.array([-0.01, 0.015]),
+        system_parameters=jnp.array([0.1, 1070.0, 2000.0]),
+    )
+    return model, inputs
+
+
+def _assert_derivative_tree(actual, expected, rtol=1e-6, atol=1e-8):
+    assert jax.tree.structure(actual) == jax.tree.structure(expected)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=rtol, atol=atol)
+
+
+def test_jvp_vjp_duality_and_hessian(derivative_case):
+    model, inputs = derivative_case
+
+    def public(y):
+        return model.forward_dynamics(0.0, y, (inputs.u, inputs.tau_ext))
+
+    def reference(y):
+        return model._forward_dynamics(0.0, y, (inputs.u, inputs.tau_ext))
+
+    tangent = inputs.y_direction
+    cotangent = jnp.flip(tangent)
+    _, action = jax.jvp(public, (inputs.y,), (tangent,))
+    _, pullback = jax.vjp(public, inputs.y)
+    assert_allclose(cotangent @ action, tangent @ pullback(cotangent)[0], rtol=1e-8)
+
+    def hvp(fn):
+        return jax.jvp(
+            jax.grad(lambda y: 1e-5 * cotangent @ fn(y)), (inputs.y,), (tangent,)
+        )[1]
+
+    assert_allclose(hvp(public), hvp(reference), rtol=1e-6, atol=1e-7)
+    epsilon = 1e-5
+    finite_difference = (
+        reference(inputs.y + epsilon * tangent)
+        - reference(inputs.y - epsilon * tangent)
+    ) / (2 * epsilon)
+    assert_allclose(action, finite_difference, rtol=1e-5, atol=1e-6)
+    jax.clear_caches()
+
+
+def test_terms_and_inverse_dynamics_compose(derivative_case):
+    model, inputs = derivative_case
+    passive = ThreadlikeImpedance(
+        routing=model.actuators[0].transmission.routing,
+        stiffness=jnp.array([10.0, 20.0]),
+        damping=jnp.array([0.1, 0.2]),
+        rest_length=jnp.array([0.09, 0.1]),
+    )
+    model = eqx.tree_at(lambda m: m.passive_elements, model, (passive,))
+    q, v = jnp.split(inputs.y, 2)
+    acceleration = jnp.array([0.03, -0.02])
+    direction = jnp.array([0.01, 0.02])
+    _assert_derivative_tree(
+        jax.jvp(model.dynamics_terms, (q, v), (direction, direction)),
+        jax.jvp(model._assemble_dynamics_terms, (q, v), (direction, direction)),
+    )
+
+    def reference(q, v, a):
+        return model._inverse_dynamics(q, v, a)
+
+    _assert_derivative_tree(
+        jax.jvp(
+            model.inverse_dynamics,
+            (q, v, acceleration),
+            (direction, direction, direction),
+        ),
+        jax.jvp(reference, (q, v, acceleration), (direction, direction, direction)),
+    )
+    _assert_derivative_tree(
+        jax.jacrev(model.inverse_dynamics, argnums=(0, 1, 2))(q, v, acceleration),
+        jax.jacrev(reference, argnums=(0, 1, 2))(q, v, acceleration),
+    )
+    effort = model.inverse_dynamics(q, v, acceleration)
+    result = model.forward_dynamics(0.0, inputs.y, (jnp.zeros_like(inputs.u), effort))
+    assert_allclose(result[q.size :], acceleration, rtol=1e-8, atol=1e-9)
+    # Explicit environment axes and vmap must agree for the public term API.
+    _assert_derivative_tree(
+        model.dynamics_terms(jnp.stack((q, q)), jnp.stack((v, v))),
+        jax.vmap(model.dynamics_terms)(jnp.stack((q, q)), jnp.stack((v, v))),
+    )
+    jax.clear_caches()
+
+
+def test_acceleration_only_inverse_dynamics_skips_state_actions(
+    derivative_case, monkeypatch
+):
+    model, inputs = derivative_case
+    q, v = jnp.split(inputs.y, 2)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("inactive state recurrence evaluated")
+
+    monkeypatch.setattr(
+        type(model), "_dynamics_terms_with_state_pushforward", forbidden
+    )
+    monkeypatch.setattr(type(model), "_inertial_force_state_pushforward", forbidden)
+    result = jax.jvp(
+        lambda a: model.inverse_dynamics(q, v, a), (v,), (jnp.ones_like(v),)
+    )[1]
+    assert_allclose(result, model._assemble_dynamics_terms(q, v)[0] @ jnp.ones_like(v))
+
+
+def test_velocity_only_terms_skip_configuration_recurrence(
+    derivative_case, monkeypatch
+):
+    model, inputs = derivative_case
+    q, v = jnp.split(inputs.y, 2)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("inactive configuration recurrence evaluated")
+
+    monkeypatch.setattr(
+        type(model), "_dynamics_terms_with_state_pushforward", forbidden
+    )
+    actual = jax.jvp(lambda v: model.dynamics_terms(q, v), (v,), (jnp.ones_like(v),))
+    expected = jax.jvp(
+        lambda v: model._assemble_dynamics_terms(q, v), (v,), (jnp.ones_like(v),)
+    )
+    _assert_derivative_tree(actual, expected)
+
+
+@pytest.mark.parametrize("implicit", [False, True])
+def test_diffrax_step_gradients_compose(derivative_case, implicit):
+    import diffrax
+    import optimistix
+
+    model, inputs = derivative_case
+    solver = (
+        diffrax.ImplicitEuler(root_finder=optimistix.Newton(rtol=1e-8, atol=1e-10))
+        if implicit
+        else diffrax.Euler()
+    )
+
+    def integrate(control, analytical):
+        field = model.forward_dynamics if analytical else model._forward_dynamics
+        solution = diffrax.diffeqsolve(
+            diffrax.ODETerm(lambda t, y, args: field(t, y, (args, inputs.tau_ext))),
+            solver,
+            t0=0.0,
+            t1=3e-4,
+            dt0=1e-4,
+            y0=inputs.y,
+            args=control,
+            adjoint=diffrax.DirectAdjoint(),
+            max_steps=8,
+        )
+        return jnp.mean(solution.ys[-1] ** 2)
+
+    def evaluate(analytical):
+        def loss(control):
+            return integrate(control, analytical)
+
+        return (
+            jax.jit(jax.value_and_grad(loss))(inputs.u),
+            jax.jit(lambda u: jax.jvp(loss, (u,), (inputs.u_direction,)))(inputs.u),
+        )
+
+    _assert_derivative_tree(evaluate(True), evaluate(False), rtol=2e-6)
+    jax.clear_caches()
+
+
+class NonlinearEffort(EffortModel):
+    def effort(self, control, coordinate, velocity):
+        return control**2 + coordinate + velocity**2
+
+
+def test_custom_effort_uses_local_fallback(derivative_case, monkeypatch):
+    model, inputs = derivative_case
+    model = eqx.tree_at(
+        lambda m: m.actuators[0]._effort_model, model, NonlinearEffort()
+    )
+    assert model._supports_analytical_inertia()
+    assert not model._supports_analytical_dynamics()
+    calls = []
+    original = type(model)._dynamics_terms_with_state_pushforward
+
+    def observed(self, *args):
+        calls.append(True)
+        return original(self, *args)
+
+    monkeypatch.setattr(type(model), "_dynamics_terms_with_state_pushforward", observed)
+
+    def public(y, u):
+        return model.forward_dynamics(0.0, y, (u, inputs.tau_ext))
+
+    def reference(y, u):
+        return model._forward_dynamics(0.0, y, (u, inputs.tau_ext))
+
+    primals = inputs.y, inputs.u
+    directions = inputs.y_direction, inputs.u_direction
+    _assert_derivative_tree(
+        jax.jvp(public, primals, directions), jax.jvp(reference, primals, directions)
+    )
+    assert calls  # The component fallback must retain analytical inertia derivatives.
+    _assert_derivative_tree(
+        jax.jacrev(public, argnums=(0, 1))(*primals),
+        jax.jacrev(reference, argnums=(0, 1))(*primals),
+    )
+    jax.clear_caches()
+
+
+def test_inverse_dynamics_model_parameter_gradients(derivative_case):
+    model, inputs = derivative_case
+    q, v = jnp.split(inputs.y, 2)
+    acceleration = jnp.array([0.03, -0.02])
+
+    def evaluate(parameters, analytical):
+        length, density, young_modulus = jnp.split(parameters, 3)
+        updated = model.update_link_params(length=length, density=density)
+        updated = updated.with_isotropic_material(
+            IsotropicMaterialParams(
+                young_modulus=young_modulus,
+                shear_modulus=jnp.full_like(young_modulus, 1000.0),
+                material_damping_coefficient=jnp.full_like(young_modulus, 0.001),
+            )
+        )
+        if analytical:
+            return updated.inverse_dynamics(q, v, acceleration)
+        return updated._inverse_dynamics(q, v, acceleration)
+
+    for transform in (jax.jacfwd, jax.jacrev):
+        actual = jax.jit(transform(lambda p: evaluate(p, True)))(
+            inputs.system_parameters
+        )
+        expected = jax.jit(transform(lambda p: evaluate(p, False)))(
+            inputs.system_parameters
+        )
+        _assert_derivative_tree(actual, expected)
+    jax.clear_caches()
+
+
+def test_large_state_platform_paths(derivative_case, monkeypatch):
+    model, inputs = derivative_case
+    monkeypatch.setattr(_derivatives, "FUSED_STATE_MAX_VELOCITIES", 0)
+
+    def public(y):
+        return model.forward_dynamics(0.0, y, (inputs.u, inputs.tau_ext))
+
+    def reference(y):
+        return model._forward_dynamics(0.0, y, (inputs.u, inputs.tau_ext))
+
+    for transform in (jax.jacfwd, jax.jacrev):
+        _assert_derivative_tree(
+            jax.jit(transform(public))(inputs.y),
+            jax.jit(transform(reference))(inputs.y),
+        )
+    q, v = jnp.split(inputs.y, 2)
+
+    def required(q):
+        return model.inverse_dynamics(q, v, v)
+
+    def raw(q):
+        return model._inverse_dynamics(q, v, v)
+
+    _assert_derivative_tree(
+        jax.jit(jax.jacfwd(required))(q), jax.jit(jax.jacfwd(raw))(q)
+    )
+    _assert_derivative_tree(
+        jax.jit(jax.jacrev(required))(q), jax.jit(jax.jacrev(raw))(q)
+    )
+    jax.clear_caches()

@@ -21,6 +21,7 @@ from soromox.actuation.core import (
     PassiveElement,
 )
 from soromox.autodiff import custom_jvp_enabled
+from soromox.execution.transforms import evaluate_inverse_dynamics
 from soromox.systems.dynamical_system import DynamicalSystem
 from soromox.systems.params import (
     validate_planar_base_pose,
@@ -3119,6 +3120,12 @@ class SoftRobot(DynamicalSystem):
         force APIs separately. Overrides must keep ``M`` and ``Cqd``
         energy-consistent with ``inertia_matrix`` and ``coriolis_matrix``.
         """
+        return self._assemble_dynamics_terms(q, qd)
+
+    def _assemble_dynamics_terms(
+        self, q: Array, qd: Array
+    ) -> tuple[Array, Array, Array]:
+        """Assemble the JAX inertia, convective force, and gravity terms."""
         if self.floating_base:
             return self._assemble_floating_dynamics_terms(q, qd)
         M = self.inertia_matrix(q)
@@ -3187,27 +3194,11 @@ class SoftRobot(DynamicalSystem):
 
         q, qd, auxiliary_state = self.split_state(y)
 
-        if actuation_args is None:
-            u, tau_ext = None, None
-        elif len(actuation_args) == 1:
-            u = actuation_args[0]
-            tau_ext = None
-        elif len(actuation_args) == 2:
-            u, tau_ext = actuation_args
-        else:
-            raise ValueError("actuation_args must be a tuple of length 1 or 2.")
-
-        if u is None:
-            u = jnp.zeros((self.num_actuators,), dtype=q.dtype)
-        if tau_ext is None:
-            tau_ext = jnp.zeros_like(qd)
+        u, tau_ext = self._actuation_inputs(actuation_args, q.dtype)
 
         M, Cqd, G = self.dynamics_terms(q, qd)
-        K = self.elastic_force(q)
-        D = self.damping_matrix(q)
         tau_u = self.actuation_force(q, u, qd=qd)
-
-        rhs = tau_u + tau_ext - Cqd - G - K - D @ qd
+        rhs = tau_u + tau_ext - Cqd - G - self.passive_force(q, qd)
         qdd = self._solve_inertia(M, rhs)
 
         qdot = self.configuration_derivative(q, qd)
@@ -3215,3 +3206,65 @@ class SoftRobot(DynamicalSystem):
             return jnp.concatenate([qdot, qdd])
         auxiliary_dot = jnp.zeros_like(auxiliary_state)
         return jnp.concatenate([qdot, qdd, auxiliary_dot])
+
+    def passive_force(self, q: Array, qd: Array) -> Array:
+        """Return total elastic and damping effort, including passive elements.
+
+        This force appears on the required-effort side of the equations:
+        ``M @ qdd + Cqd + G + passive_force(q, qd) = applied effort``.
+        The output has shape ``(num_velocities,)``.
+        """
+        return self.elastic_force(q) + self.damping_matrix(q) @ qd
+
+    def _actuation_inputs(self, args: tuple | None, dtype) -> tuple[Array, Array]:
+        """Normalize optional controls and external generalized effort."""
+        if args is not None and len(args) not in (1, 2):
+            raise ValueError("actuation_args must be a tuple of length 1 or 2.")
+        u = None if args is None else args[0]
+        external = args[1] if args is not None and len(args) == 2 else None
+        return (
+            jnp.zeros((self.num_actuators,), dtype=dtype) if u is None else u,
+            jnp.zeros((self.num_velocities,), dtype=dtype)
+            if external is None
+            else external,
+        )
+
+    def _applied_force(self, q: Array, qd: Array, u: Array, external: Array) -> Array:
+        """Net applied generalized force for the JAX dynamics assembly."""
+        return self._actuation_force(q, u, qd) + external - self.passive_force(q, qd)
+
+    def _forward_dynamics(
+        self, t: Array, y: Array, actuation_args: tuple | None = None
+    ) -> Array:
+        """Assemble the JAX equations for a single forward-dynamics state."""
+        del t
+        q, v, auxiliary = self.split_state(y)
+        u, external = self._actuation_inputs(actuation_args, y.dtype)
+        mass, convective, gravity = self._assemble_dynamics_terms(q, v)
+        acceleration = self._solve_inertia(
+            mass, self._applied_force(q, v, u, external) - convective - gravity
+        )
+        return self.pack_state(
+            self.configuration_derivative(q, v), acceleration, jnp.zeros_like(auxiliary)
+        )
+
+    def inverse_dynamics(self, q: Array, qd: Array, qdd: Array) -> Array:
+        """Return generalized effort required for the requested acceleration.
+
+        Computes ``M @ qdd + Cqd + G + passive_force(q, qd)``, including elastic
+        and damping effort. External applied effort is excluded. The result is
+        a generalized force of shape ``(num_velocities,)``; actuator control
+        allocation is a separate operation. JAX transformations support state,
+        acceleration, and model parameter derivatives.
+
+        Args:
+            q: Configuration of shape ``(num_coordinates,)``.
+            qd: Velocity of shape ``(num_velocities,)``.
+            qdd: Acceleration of shape ``(num_velocities,)``.
+        """
+        return evaluate_inverse_dynamics(self, q, qd, qdd)
+
+    def _inverse_dynamics(self, q: Array, qd: Array, qdd: Array) -> Array:
+        """Assemble the JAX equations for required generalized effort."""
+        mass, convective, gravity = self._assemble_dynamics_terms(q, qd)
+        return mass @ qdd + convective + gravity + self.passive_force(q, qd)

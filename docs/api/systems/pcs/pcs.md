@@ -73,9 +73,12 @@ installed passive elements. External applied forces must be subtracted from
 that effort. Converting the remaining generalized effort to actuator controls
 is a separate problem, particularly for an underactuated robot.
 
-The older `inverse_dynamics_derivatives` and `inverse_dynamics_backward_pass`
-helpers describe only `M @ qdd + Cqd + G`. Differentiate `inverse_dynamics`
-directly when passive-force derivatives are needed.
+`inverse_dynamics` and `passive_force` are defined on `SoftRobot` and are shared
+by PCS, planar PCS, and GVS. The PCS inertial-only recurrences are private
+implementation details. Migrate calls to the former `inverse_dynamics_derivatives`,
+`inverse_dynamics_backward_pass`, or `inverse_dynamics_state_pushforward` helpers
+to JAX transformations of `inverse_dynamics` for complete required-effort
+derivatives. These include passive-force derivatives.
 
 Supported PCS state derivatives use analytical recurrences. Other dependencies
 use composable autodiff fallbacks. The forward-dynamics derivative reuses its

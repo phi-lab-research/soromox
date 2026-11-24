@@ -35,6 +35,7 @@ from soromox.execution import (
     dispatch_kinematics_abscissa_batched,
     evaluate_forward_dynamics,
 )
+from soromox.systems import _dynamics
 from soromox.systems.components import (
     ContinuumLinkParams,
     CrossSectionGeometry,
@@ -4981,12 +4982,6 @@ class PCS(SoftRobot):
             self, t, y, actuation_args, backend, PCS_DYNAMICS
         )
 
-    def _forward_dynamics(
-        self, t: Array, y: Array, actuation_args: tuple | None = None
-    ) -> Array:
-        """Evaluate the current JAX equations without the analytical FD rule."""
-        return _derivatives.forward_dynamics_reference(self, t, y, actuation_args)
-
     def _supports_analytical_inertia(self) -> bool:
         """Whether the spatial recurrences cover this model's inertia and state."""
         return (
@@ -5020,14 +5015,7 @@ class PCS(SoftRobot):
         """Optional shared-execution hook; return None for unsupported physics."""
         if not custom_jvp_enabled() or not self._supports_analytical_inertia():
             return None
-        return PCS._forward_dynamics_state_jvp(primals, tangents)
-
-    def _forward_dynamics_with_inertia(
-        self, t: Array, y: Array, actuation_args: tuple | None = None
-    ) -> tuple[Array, Array]:
-        """Evaluate forward dynamics and return its assembled inertia matrix."""
-        yd, mass, _ = self._forward_dynamics_with_factors(t, y, actuation_args)
-        return yd, mass
+        return _derivatives.forward_dynamics_jvp(primals, tangents)
 
     def _forward_dynamics_with_factors(self, t, y, actuation_args=None):
         """Prepare the primal and reusable factors for explicit Jacobian helpers."""
@@ -5058,37 +5046,14 @@ class PCS(SoftRobot):
 
         rhs = tau_u + tau_ext - Cqd - G - tau_el - self.damping_matrix(q) @ qd
 
-        factors = _derivatives.factor_inertia(B)
-        qdd = _derivatives.solve_factored(factors, rhs)
+        factors = _dynamics.factor_inertia(B)
+        qdd = _dynamics.solve_factored(factors, rhs)
 
         yd = self.pack_state(
             self.configuration_derivative(q, qd), qdd, jnp.zeros_like(auxiliary)
         )
 
         return yd, B, factors
-
-    @eqx.filter_custom_jvp
-    @staticmethod
-    def _forward_dynamics_custom_jvp(
-        robot: "PCS",
-        t: Array,
-        y: Array,
-        actuation_args: tuple | None,
-    ) -> Array:
-        """Custom-JVP entry point for PCS forward dynamics."""
-        return robot._forward_dynamics(t, y, actuation_args)
-
-    @_forward_dynamics_custom_jvp.def_jvp
-    def _forward_dynamics_custom_jvp_jvp(primals, tangents):
-        return PCS._forward_dynamics_state_jvp(primals, tangents)
-
-    @staticmethod
-    def _forward_dynamics_state_jvp(
-        primals: tuple["PCS", Array, Array, tuple | None],
-        tangents: tuple[Any, Array | None, Array | None, tuple | None],
-    ) -> tuple[Array, Array]:
-        """Compose state, input, and parameter actions with one factorization."""
-        return _derivatives.forward_dynamics_jvp(primals, tangents)
 
     @eqx.filter_jit
     def _local_id_jacobian_kinematics(
@@ -5550,7 +5515,7 @@ class PCS(SoftRobot):
         )
 
     @eqx.filter_jit
-    def _inverse_dynamics_state_pushforward_forward_pass(
+    def _inertial_force_state_forward_pass(
         self,
         q: Array,
         qd: Array,
@@ -5782,7 +5747,7 @@ class PCS(SoftRobot):
         )
 
     @eqx.filter_jit
-    def inverse_dynamics_backward_pass(
+    def _inertial_force_jacobians(
         self,
         q: Array,
         qd: Array,
@@ -5991,7 +5956,7 @@ class PCS(SoftRobot):
         return dID_dq, dID_dqd
 
     @eqx.filter_jit
-    def inverse_dynamics_state_pushforward(
+    def _inertial_force_state_pushforward(
         self,
         q: Array,
         qd: Array,
@@ -6001,11 +5966,10 @@ class PCS(SoftRobot):
     ) -> Array:
         """Apply the state derivative of inverse dynamics to directions.
 
-        Unlike :meth:`inverse_dynamics_backward_pass`, this recurrence
-        contracts the requested directions before the tip-to-base scan. It
-        therefore carries arrays with shape ``(6, num_directions)`` and
-        ``(num_dofs, num_directions)`` instead of materializing the square
-        inverse-dynamics Jacobians.
+        This recurrence contracts the requested directions before the
+        tip-to-base scan. It carries arrays with shape ``(6, num_directions)``
+        and ``(num_velocities, num_directions)`` for the inertial effort
+        ``M @ qdd + Cqd + G``.
 
         Args:
             q: Generalized coordinates with shape ``(self.num_coordinates,)``.
@@ -6046,7 +6010,7 @@ class PCS(SoftRobot):
             S,
             S_directions,
             pose_directions_local,
-        ) = self._inverse_dynamics_state_pushforward_forward_pass(
+        ) = self._inertial_force_state_forward_pass(
             q,
             qd,
             qdd,
@@ -6160,59 +6124,11 @@ class PCS(SoftRobot):
             )
         return dID
 
-    def inverse_dynamics(self, q: Array, qd: Array, qdd: Array) -> Array:
-        """Return generalized effort required for the requested acceleration.
-
-        The convention is ``M @ qdd + Cqd + G + elastic + damping @ qd``.
-        This includes passive forces and excludes external applied effort.
-        The result is a generalized force, not actuator controls. Ordinary
-        JAX transformations support state, acceleration, and model parameters.
-
-        Args:
-            q: Configuration, shape ``(num_coordinates,)``.
-            qd: Velocity, shape ``(num_velocities,)``.
-            qdd: Acceleration, shape ``(num_velocities,)``.
-
-        Returns:
-            Required generalized effort, shape ``(num_velocities,)``.
-        """
-        if custom_jvp_enabled():
-            return _derivatives.inverse_dynamics(self, q, qd, qdd)
-        return _derivatives.inverse_dynamics_reference(self, q, qd, qdd)
-
-    @eqx.filter_jit
-    def inverse_dynamics_derivatives(
-        self,
-        q: Array,
-        qd: Array,
-        qdd: Array,
-    ) -> tuple[Array, Array]:
-        """
-        Return inverse-dynamics derivatives from the analytical PCS passes.
-
-        This helper describes ``M @ qdd + Cqd + G`` and excludes passive
-        forces. Use JAX transformations of :meth:`inverse_dynamics` when the
-        derivative of the complete required effort is needed.
-
-        Args:
-            q (Array): Generalized coordinates. Shape is
-                ``(self.num_coordinates,)``.
-            qd (Array): Active generalized velocities. Shape is
-                ``(self.num_velocities,)``.
-            qdd (Array): Active generalized accelerations. Shape is
-                ``(self.num_velocities,)``.
-
-        Returns:
-            tuple[Array, Array]: The derivatives ``(dID_dq, dID_dqd)`` with shapes
-            ``(self.num_velocities, self.num_coordinates)`` and
-            ``(self.num_velocities, self.num_velocities)``, respectively.
-        """
-        dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(
-            q,
-            qd,
-            qdd,
-        )
-        return dID_dq, dID_dqd
+    def _analytical_inverse_dynamics_jvp(self, primals, tangents):
+        """Supply PCS actions to the shared required-effort derivative rule."""
+        if not custom_jvp_enabled() or not self._supports_analytical_inertia():
+            return None
+        return _derivatives.inverse_dynamics_jvp(primals, tangents)
 
     @eqx.filter_jit
     def elastic_force_derivative_q(self, q: Array) -> Array:
@@ -6360,7 +6276,7 @@ class PCS(SoftRobot):
         factors=None,
     ) -> tuple[Array, Array]:
         """Return state derivatives while reusing an assembled inertia matrix."""
-        dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(q, qd, qdd)
+        dID_dq, dID_dqd = self._inertial_force_jacobians(q, qd, qdd)
 
         def applied_force(q_value, qd_value):
             return (
@@ -6371,10 +6287,8 @@ class PCS(SoftRobot):
 
         dtau_dq, dtau_dqd = jacfwd(applied_force, argnums=(0, 1))(q, qd)
 
-        factors = (
-            _derivatives.factor_inertia(mass_matrix) if factors is None else factors
-        )
-        derivatives = _derivatives.solve_factored(
+        factors = _dynamics.factor_inertia(mass_matrix) if factors is None else factors
+        derivatives = _dynamics.solve_factored(
             factors, jnp.concatenate((dtau_dq - dID_dq, dtau_dqd - dID_dqd), axis=1)
         )
         return derivatives[:, : q.size], derivatives[:, q.size :]
@@ -6419,10 +6333,8 @@ class PCS(SoftRobot):
         factors=None,
     ) -> tuple[Array, Array]:
         """Return input derivatives while reusing an assembled inertia matrix."""
-        factors = (
-            _derivatives.factor_inertia(mass_matrix) if factors is None else factors
-        )
-        derivatives = _derivatives.solve_factored(
+        factors = _dynamics.factor_inertia(mass_matrix) if factors is None else factors
+        derivatives = _dynamics.solve_factored(
             factors,
             jnp.concatenate(
                 (

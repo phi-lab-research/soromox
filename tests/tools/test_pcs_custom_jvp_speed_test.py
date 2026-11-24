@@ -89,8 +89,7 @@ def test_custom_jvp_input_only_tangent_matches_direct_jax_autodiff() -> None:
         lambda u_value: model._forward_dynamics(t, y, (u_value, tau_ext))
     )(u)
     candidate = jax.jacfwd(
-        lambda u_value: PCS._forward_dynamics_custom_jvp(
-            model,
+        lambda u_value: model.forward_dynamics(
             t,
             y,
             (u_value, tau_ext),
@@ -199,8 +198,7 @@ def test_custom_jvp_state_tangent_accepts_optional_inputs(
         lambda y_value: model._forward_dynamics(t, y_value, actuation_args)
     )(y)
     candidate = jax.jacfwd(
-        lambda y_value: PCS._forward_dynamics_custom_jvp(
-            model,
+        lambda y_value: model.forward_dynamics(
             t,
             y_value,
             actuation_args,
@@ -262,3 +260,73 @@ def test_benchmark_rejects_nonfinite_results():
         )
         assert absolute == float("inf")
         assert relative == float("inf")
+
+
+@pytest.fixture
+def benchmark_case():
+    model = benchmark.build_model("threadlike", 1, 3)
+    return model, benchmark.build_inputs(model)
+
+
+@pytest.mark.parametrize(
+    "workload",
+    [
+        "state_vjp",
+        "input_vjp",
+        "mixed_jvp",
+        "mixed_vjp",
+        "state_jacrev",
+        "state_directions",
+        "batched_state_jvp",
+        "rollout_loss_state",
+        "rollout_loss_input",
+        "rollout_loss_parameters",
+        "rollout_loss_mixed",
+        "rollout_loss_checkpointed",
+    ],
+)
+def test_composed_workloads_match_reference(benchmark_case, workload):
+    model, inputs = benchmark_case
+
+    def make(enabled):
+        return jax.jit(
+            benchmark.build_workload(
+                model,
+                workload,
+                inputs.y_direction,
+                inputs.u_direction,
+                inputs.system_parameter_direction,
+                rollout_steps=3,
+                rollout_dt=1e-4,
+                use_custom_jvp=enabled,
+            )
+        )
+
+    args = (inputs.y, inputs.u, inputs.tau_ext, inputs.system_parameters)
+    _assert_trees_allclose(make(True)(*args), make(False)(*args))
+    jax.clear_caches()
+
+
+@pytest.mark.skipif(
+    jax.default_backend() != "cpu", reason="CPU LAPACK factorization inspection"
+)
+@pytest.mark.parametrize("workload", ["mixed_jvp", "state_directions"])
+def test_compiled_primal_and_tangents_share_one_factorization(benchmark_case, workload):
+    model, inputs = benchmark_case
+    fn = benchmark.build_workload(
+        model,
+        workload,
+        inputs.y_direction,
+        inputs.u_direction,
+        inputs.system_parameter_direction,
+        rollout_steps=3,
+        rollout_dt=1e-4,
+        use_custom_jvp=True,
+    )
+    program = (
+        jax.jit(fn)
+        .lower(inputs.y, inputs.u, inputs.tau_ext, inputs.system_parameters)
+        .compiler_ir("hlo")
+        .as_hlo_text()
+    )
+    assert program.count('custom_call_target="lapack_dpotrf_ffi"') == 1

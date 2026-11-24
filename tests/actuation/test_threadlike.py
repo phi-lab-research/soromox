@@ -240,8 +240,7 @@ def test_pcs_custom_jvp_includes_threadlike_passive_state_tangent():
         (y_direction,),
     )
     candidate = jax.jvp(
-        lambda y_value: PCS._forward_dynamics_custom_jvp(
-            robot,
+        lambda y_value: robot.forward_dynamics(
             jnp.array(0.0),
             y_value,
             (u, tau_ext),
@@ -761,8 +760,7 @@ def test_pcs_analytical_state_jvp_covers_threadlike_actuation_and_impedance():
         (y_tangent,),
     )
     _, actual = jax.jvp(
-        lambda y_value: PCS._forward_dynamics_custom_jvp(
-            robot,
+        lambda y_value: robot.forward_dynamics(
             t,
             y_value,
             (u, tau_ext),

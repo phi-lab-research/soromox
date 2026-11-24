@@ -99,7 +99,7 @@ def test_input_and_external_tangents_skip_state_recurrence(monkeypatch):
         raise AssertionError("An input tangent must not evaluate the state recurrence")
 
     monkeypatch.setattr(PCS, "_dynamics_terms_with_state_pushforward", forbidden)
-    monkeypatch.setattr(PCS, "inverse_dynamics_state_pushforward", forbidden)
+    monkeypatch.setattr(PCS, "_inertial_force_state_pushforward", forbidden)
     directions = (jnp.ones_like(u), jnp.ones_like(force))
     expected = jax.jvp(
         lambda control, external: model._forward_dynamics(0.0, y, (control, external)),
