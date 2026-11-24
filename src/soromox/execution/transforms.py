@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
+from soromox.autodiff import custom_jvp_enabled
 from soromox.execution.types import (
     AbscissaBatchedKinematicsEvaluator,
     ActuationForceEvaluator,
@@ -186,6 +187,28 @@ def _evaluate_forward_kinematics_jvp(
 ) -> tuple[Array, Array]:
     """Route pose derivatives through the model's established JAX rule."""
 
+    return _pose_jvp(primals, tangents)
+
+
+@eqx.filter_custom_jvp
+def evaluate_pose(model, q, s):
+    """Evaluate a base-system pose with ordinary JAX batching semantics."""
+    return model._absolute_forward_kinematics(q, s)
+
+
+@evaluate_pose.def_jvp
+def _evaluate_pose_jvp(primals, tangents):
+    return _pose_jvp(primals, tangents)
+
+
+def _pose_jvp(primals, tangents):
+    """Select the configured pose derivative for JAX and accelerated callers."""
+    if not custom_jvp_enabled():
+        return eqx.filter_jvp(
+            lambda model, q, s: model._absolute_forward_kinematics(q, s),
+            primals,
+            tangents,
+        )
     model, q, s = primals
     model_tangent, qd, sd = tangents
     return model._forward_kinematics_jvp(q, s, qd, sd, model_tangent=model_tangent)
@@ -309,17 +332,13 @@ def make_kinematics_evaluators(
         primals: tuple[KinematicsModel, Array, Array],
         tangents: tuple[Any, Array | None, Array | None],
     ) -> tuple[KinematicsResult, KinematicsResult]:
-        model, q, s = primals
-        model_tangent, qd, sd = tangents
         if operation == "jacobian":
             return eqx.filter_jvp(
                 lambda model_, q_, s_: model_._absolute_inertial_jacobian(q_, s_),
                 primals,
                 tangents,
             )
-        pose, pose_tangent = model._forward_kinematics_jvp(
-            q, s, qd, sd, model_tangent=model_tangent
-        )
+        pose, pose_tangent = _pose_jvp(primals, tangents)
         if operation == "pose":
             return pose, pose_tangent
         jacobian, jacobian_tangent = eqx.filter_jvp(
@@ -595,6 +614,48 @@ def make_dynamics_actuation_evaluator(
     return evaluate_terms
 
 
+def _jacobian_primal(model, q, s):
+    return (
+        model._floating_jacobian(q, s) if model.floating_base else model._jacobian(q, s)
+    )
+
+
+@eqx.filter_custom_jvp
+def evaluate_jacobian(model, q, s):
+    """Evaluate the system Jacobian with optional analytical derivatives."""
+    return _jacobian_primal(model, q, s)
+
+
+@evaluate_jacobian.def_jvp
+def _evaluate_jacobian_jvp(primals, tangents):
+    model, q, s = primals
+    if custom_jvp_enabled() and not model.floating_base:
+        dmodel, dq, ds = tangents
+        return model._jacobian_jvp(q, s, dq, ds, model_tangent=dmodel)
+    return eqx.filter_jvp(_jacobian_primal, primals, tangents)
+
+
+def _energy_primal(model, q, velocity, kind):
+    from soromox.systems import _energy
+
+    return _energy.evaluate(model, q, velocity, kind)
+
+
+@eqx.filter_custom_jvp
+def evaluate_energy(model, q, velocity, kind):
+    """Evaluate energy through an optional model rule and a shared AD fallback."""
+    return _energy_primal(model, q, velocity, kind)
+
+
+@evaluate_energy.def_jvp
+def _evaluate_energy_jvp(primals, tangents):
+    if custom_jvp_enabled():
+        result = primals[0]._analytical_energy_jvp(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(_energy_primal, primals, tangents)
+
+
 @eqx.filter_custom_jvp
 def evaluate_inverse_dynamics(model, q, qd, qdd):
     """Evaluate required effort through the model's JAX assembly."""
@@ -822,6 +883,9 @@ __all__ = [
     "KinematicsBatchExecutor",
     "evaluate_forward_dynamics",
     "evaluate_inverse_dynamics",
+    "evaluate_energy",
+    "evaluate_pose",
+    "evaluate_jacobian",
     "make_actuation_evaluator",
     "make_dynamics_evaluator",
     "make_dynamics_actuation_evaluator",

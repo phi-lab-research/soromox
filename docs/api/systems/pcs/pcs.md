@@ -52,21 +52,8 @@ pcs = pcs.with_params(pcs.params.replace(link=replacement))
 
 ## Dynamics derivatives
 
-Use ordinary JAX transformations to differentiate forward dynamics, dynamics
-terms, or inverse dynamics. The derivative rules compose with a loss or an
-integration routine and preserve differentiation of continuous model parameters.
-
-```python
-import jax
-
-# Directional state derivative and reverse-mode control derivative.
-yd, dyd = jax.jvp(lambda y: pcs.forward_dynamics(t, y, (u,)), (y,), (dy,))
-bar_u = jax.grad(lambda u: cotangent @ pcs.forward_dynamics(t, y, (u,)))(u)
-
-# Required generalized effort and its configuration/velocity/acceleration Jacobians.
-effort = pcs.inverse_dynamics(q, qd, qdd)
-Dq, Dv, Da = jax.jacfwd(pcs.inverse_dynamics, argnums=(0, 1, 2))(q, qd, qdd)
-```
+See the [Differentiation guide](../../../user-guide/differentiation.md) for JAX
+examples, CPU/GPU recommendations, and the analytical derivative support table.
 
 `inverse_dynamics` returns `M @ qdd + Cqd + G + elastic + damping @ qd`, including
 installed passive elements. External applied forces must be subtracted from
@@ -81,12 +68,6 @@ to JAX transformations of `inverse_dynamics` for complete required-effort
 derivatives. These include passive-force derivatives. For inertial effort alone,
 subtract `pcs.passive_force(q, qd)` from `pcs.inverse_dynamics(q, qd, qdd)`
 before applying the JAX transformation.
-
-Supported PCS state derivatives use analytical recurrences. Other dependencies
-use composable autodiff fallbacks. The forward-dynamics derivative reuses its
-inertia factorization across active contributions. A Jacobian of continuous
-forward dynamics is distinct from the Jacobian of an integration step; apply
-JAX to the step or rollout when that is the derivative your application needs.
 
 ## API Reference
 

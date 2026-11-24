@@ -315,6 +315,9 @@ assert jnp.allclose(updated.params.link.damping, damping)
 
 ## Differentiating parameter updates
 
+See [Differentiation](differentiation.md) for the general JAX interface and
+derivative mode selection.
+
 Typed params and robot updates are JAX PyTrees, so a loss can construct a
 candidate robot without mutation. This example differentiates all active
 isotropic material fields:

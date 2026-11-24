@@ -243,20 +243,38 @@ def test_public_forward_kinematics_custom_jvp_preserves_model_tangent() -> None:
     assert jnp.any(actual != 0.0)
 
 
-def test_model_jvp_tangent_skips_inactive_tangent_tree() -> None:
-    robot = _ModelTangentDefaultRobot()
-    output_tangent = jnp.array([0.2, -0.4], dtype=jnp.float64)
+@pytest.mark.parametrize("kind", ["kinetic", "total"])
+@pytest.mark.parametrize("active", ["q", "velocity"])
+def test_energy_jvp_skips_inactive_actions_and_evaluates_primal_once(
+    kind, active, monkeypatch
+):
+    robot = _PlanarDefaultRobot()
+    q, v = jnp.array([0.2, -0.3]), jnp.array([0.7, -0.4])
+    original = getattr(type(robot), f"_{kind}_energy")
+    calls = []
 
-    def unexpected_model_evaluation(_robot: _ModelTangentDefaultRobot) -> Array:
-        raise AssertionError("inactive model tangents must not evaluate the model JVP")
+    def counted(self, q, v):
+        calls.append(None)
+        return original(self, q, v)
 
-    actual = robot._add_model_jvp_tangent(
-        output_tangent,
-        {"none": None, "integer_zero": 0},
-        unexpected_model_evaluation,
+    def forbidden(*args, **kwargs):
+        raise AssertionError("inactive energy action was called")
+
+    inactive_hook = (
+        "_kinetic_energy_qd_jvp_tangent"
+        if active == "q"
+        else "_kinetic_energy_q_jvp_tangent"
     )
-
-    assert_allclose(actual, output_tangent, rtol=0.0, atol=0.0)
+    monkeypatch.setattr(type(robot), inactive_hook, forbidden)
+    monkeypatch.setattr(type(robot), f"_{kind}_energy", counted)
+    method = getattr(robot, f"{kind}_energy")
+    fn = (lambda q: method(q, v)) if active == "q" else (lambda v: method(q, v))
+    point = q if active == "q" else v
+    with custom_jvp_mode(True):
+        value, tangent = jax.jvp(fn, (point,), (jnp.ones_like(point),))
+    assert jnp.isfinite(value) and jnp.isfinite(tangent)
+    assert len(calls) == 1
+    jax.clear_caches()
 
 
 @pytest.mark.parametrize(
@@ -637,3 +655,69 @@ def test_default_kinetic_energy_custom_jvp_uses_default_dynamics_terms() -> None
     )
     assert_allclose(expected_from_dynamics_terms, expected, rtol=1e-12, atol=1e-12)
     assert_allclose(Td, expected, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "forward_kinematics",
+        "jacobian",
+        "kinetic_energy",
+        "gravitational_energy",
+        "elastic_energy",
+        "potential_energy",
+        "total_energy",
+    ],
+)
+def test_joint_model_and_state_derivatives(operation, enabled):
+    """Mixed parameter/state requests preserve forward, reverse, and second order AD."""
+    robot = _ModelTangentDefaultRobot()
+    x = jnp.array([1.25, 0.2, -0.3, 0.7, -0.4, 0.8])
+    direction = jnp.linspace(0.01, 0.06, x.size)
+
+    def objective(x, *, public):
+        candidate = eqx.tree_at(lambda model: model.model_scale, robot, x[0])
+        method = getattr(candidate, operation if public else f"_{operation}")
+        if operation in ("forward_kinematics", "jacobian"):
+            value = method(x[1:3], x[5])
+        elif operation in ("kinetic_energy", "total_energy"):
+            value = method(x[1:3], x[3:5])
+        else:
+            value = method(x[1:3])
+        return jnp.sum(value**2)
+
+    def derivatives(fn):
+        return jax.jit(
+            lambda x: (
+                jax.jvp(fn, (x,), (direction,)),
+                jax.grad(fn)(x),
+                jax.jvp(jax.grad(fn), (x,), (direction,))[1],
+            )
+        )(x)
+
+    with custom_jvp_mode(enabled):
+        actual = derivatives(lambda x: objective(x, public=True))
+        expected = derivatives(lambda x: objective(x, public=False))
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-10, atol=1e-11)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("operation", ["forward_kinematics", "jacobian"])
+def test_disabled_base_kinematics_skips_analytical_hooks(operation, monkeypatch):
+    robot = _PlanarDefaultRobot()
+    q, s = jnp.array([0.2, -0.3]), jnp.array(0.8)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled analytical hook was called")
+
+    monkeypatch.setattr(type(robot), f"_{operation}_jvp", forbidden)
+    with custom_jvp_mode(False):
+        actual = jax.jit(jax.jacrev(getattr(robot, operation), argnums=(0, 1)))(q, s)
+        expected = jax.jit(jax.jacrev(getattr(robot, f"_{operation}"), argnums=(0, 1)))(
+            q, s
+        )
+    for a, b in zip(actual, expected, strict=True):
+        assert_allclose(a, b, rtol=1e-10, atol=1e-11)
+    jax.clear_caches()

@@ -4,8 +4,10 @@ Both flags are read by public APIs at trace time. Jitted functions capture the
 Python value when they are traced, so change a flag before tracing or retrace
 after changing it.
 
-- ``custom_jvp_enabled`` selects whether ``SoftRobot`` wrappers dispatch to
-  their registered custom JVP rules.
+- ``custom_jvp_enabled`` controls optional analytical derivative dispatch when
+  applying JAX transformations to system methods, including shared execution
+  boundaries. Explicit analytical helpers retain their requested algorithms.
+  Numerical safety and implicit-solver derivative definitions remain active.
 - ``strict_singularities_enabled`` selects whether the ``safe_*`` helpers in
   ``soromox.utils`` fall back at a singular input or let it propagate. Enable it
   to find out *where* a model reaches a singular configuration; leave it off for

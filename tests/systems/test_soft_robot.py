@@ -11,6 +11,7 @@ from system_param_builders import (
     planar_pcs_params,
 )
 
+from soromox import custom_jvp_mode
 from soromox.systems import (
     GVS,
     PCS,
@@ -281,3 +282,78 @@ def test_required_effort_and_shared_derivative_composition(factory, floating_bas
     for value, reference in zip(actual, expected, strict=True):
         assert_allclose(value, reference, rtol=1e-6, atol=1e-8)
     jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+def test_disabled_pose_derivatives_skip_analytical_hooks(factory, monkeypatch):
+    robot = factory(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    s = jnp.array(0.05)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled analytical pose rule was called")
+
+    monkeypatch.setattr(type(robot), "_forward_kinematics_jvp", forbidden)
+    with custom_jvp_mode(False):
+        actual = jax.jit(
+            jax.jacfwd(lambda s: robot.forward_kinematics(q, s, backend="jax"))
+        )(s)
+        expected = jax.jit(
+            jax.jacfwd(lambda s: robot._absolute_forward_kinematics(q, s))
+        )(s)
+    assert_allclose(actual, expected, rtol=1e-7, atol=1e-9)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("floating_base", [False, True])
+def test_shared_energy_derivatives_compose(factory, floating_base, monkeypatch):
+    from soromox.systems import _energy
+
+    robot = factory(floating_base=floating_base)
+    base_pose = None
+    if floating_base:
+        base_pose = (
+            jnp.array([0.1, -0.1, 0.2])
+            if robot.num_base_coordinates == 3
+            else jnp.array([0.1, -0.1, 0.2, 0.0, 0.0, 0.0, 1.0])
+        )
+    q = robot.pack_configuration(
+        jnp.linspace(-0.02, 0.03, robot.num_internal_dofs), base_pose=base_pose
+    )
+    v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+    dq, dv = jnp.full_like(q, 0.01), jnp.full_like(v, 0.02)
+    original = type(robot)._analytical_energy_jvp
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled analytical energy rule was called")
+
+    for enabled in (False, True):
+        monkeypatch.setattr(
+            type(robot), "_analytical_energy_jvp", original if enabled else forbidden
+        )
+        for kind in ("kinetic", "gravitational", "elastic", "potential", "total"):
+
+            def fn(q, v, kind=kind):
+                method = getattr(robot, f"{kind}_energy")
+                return method(q, v) if kind in ("kinetic", "total") else method(q)
+
+            def raw(q, v, kind=kind):
+                return _energy.evaluate(robot, q, v, kind)
+
+            def derivatives(function):
+                return jax.jit(
+                    lambda q, v: (
+                        jax.jvp(function, (q, v), (dq, dv)),
+                        jax.grad(function, argnums=(0, 1))(q, v),
+                    )
+                )(q, v)
+
+            with custom_jvp_mode(enabled):
+                actual = derivatives(fn)
+                expected = derivatives(raw)
+            for a, b in zip(
+                jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True
+            ):
+                assert_allclose(a, b, rtol=1e-6, atol=1e-8)
+        jax.clear_caches()

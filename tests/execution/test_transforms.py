@@ -7,9 +7,11 @@ from typing import Any
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import pytest
 from jax import Array
 from numpy.testing import assert_allclose
 
+from soromox import custom_jvp_mode
 from soromox.execution import (
     DynamicsTerms,
     ExecutionBackend,
@@ -17,6 +19,7 @@ from soromox.execution import (
     make_dynamics_evaluator,
     make_kinematics_evaluators,
 )
+from soromox.execution.transforms import evaluate_forward_kinematics
 
 jax.config.update("jax_enable_x64", True)
 
@@ -271,3 +274,65 @@ def test_forward_dynamics_boundary_routes_derivatives_to_jax() -> None:
         lambda y_: jnp.sum(evaluate_forward_dynamics(model, time, y_, None, None))
     )(y)
     assert_allclose(actual_gradient, expected_gradient, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("adapter", ["jax", "accelerated_pose", "accelerated_pair"])
+@pytest.mark.parametrize("transform", ["jvp", "grad", "jacfwd", "jacrev"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_pose_derivative_mode_across_execution_boundaries(
+    adapter, transform, enabled, monkeypatch
+):
+    model = _KinematicsTransformProbe(offset=jnp.zeros(3))
+    q = jnp.array([0.1, -0.2, 0.3])
+    samples = jnp.array([0.2, 0.4])
+    calls = []
+    original = _KinematicsTransformProbe._forward_kinematics_jvp
+
+    def observed(self, *args, **kwargs):
+        assert enabled, "disabled analytical pose hook was called"
+        calls.append(True)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(_KinematicsTransformProbe, "_forward_kinematics_jvp", observed)
+    monkeypatch.setattr(
+        _KinematicsTransformProbe,
+        "_absolute_inertial_jacobian",
+        lambda self, q, s: jnp.diag(q + s + self.offset),
+        raising=False,
+    )
+
+    def forbidden_primal(*args):
+        raise AssertionError("differentiation staged an accelerated primal")
+
+    if adapter == "jax":
+        evaluate = evaluate_forward_kinematics
+    else:
+        evaluate, _ = make_kinematics_evaluators(
+            forbidden_primal,
+            family_name="test",
+            operation="pose" if adapter == "accelerated_pose" else "pose_and_jacobian",
+        )
+
+    def reference(s):
+        pose = model._absolute_forward_kinematics(q, s)
+        if adapter == "accelerated_pair":
+            return pose, model._absolute_inertial_jacobian(q, s)
+        return pose
+
+    def differentiate(fn):
+        if transform == "jvp":
+            return lambda s: jax.jvp(fn, (s,), (jnp.ones_like(s),))
+        if transform == "grad":
+            return jax.grad(lambda s: sum(jnp.sum(x) for x in jax.tree.leaves(fn(s))))
+        return getattr(jax, transform)(fn)
+
+    with custom_jvp_mode(enabled):
+        actual = jax.jit(jax.vmap(differentiate(lambda s: evaluate(model, q, s))))(
+            samples
+        )
+    expected = jax.jit(jax.vmap(differentiate(reference)))(samples)
+    assert jax.tree.structure(actual) == jax.tree.structure(expected)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    assert bool(calls) == enabled
+    jax.clear_caches()

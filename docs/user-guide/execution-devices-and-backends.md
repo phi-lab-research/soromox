@@ -290,16 +290,8 @@ the model uses Warp for ordinary primal GPU calls. This applies to accelerated
 kinematics and Jacobians as well as `model.dynamics_terms` and complete
 `forward_dynamics` evaluations.
 
-```python
-import jax
-import jax.numpy as jnp
-
-def objective(q_value):
-    B, Cqd, G = robot.dynamics_terms(q_value, qd)
-    return jnp.sum(B) + jnp.sum(Cqd**2) + jnp.sum(G**2)
-
-gradient = jax.grad(objective)(q)
-```
+See [Differentiation](differentiation.md) for mode selection, derivative
+representations, examples, and analytical support by model.
 
 The same routing applies to `jax.jvp`, `jax.jacfwd`, `jax.jacrev`, and reverse
 mode through a rollout. The returned derivatives therefore retain the existing
