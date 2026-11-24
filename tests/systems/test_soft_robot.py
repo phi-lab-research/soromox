@@ -28,7 +28,7 @@ from soromox.systems import (
 jax.config.update("jax_enable_x64", True)
 
 
-def _planar_robot(*, floating_base: bool) -> PlanarPCS:
+def _planar_robot(*, floating_base: bool, model_type=PlanarPCS) -> PlanarPCS:
     params = planar_pcs_params(
         length=jnp.array([0.1]),
         radius=jnp.array([0.01]),
@@ -38,7 +38,7 @@ def _planar_robot(*, floating_base: bool) -> PlanarPCS:
         damping_matrix=jnp.eye(3),
         gravity=jnp.array([0.0, -9.81]),
     )
-    return PlanarPCS(
+    return model_type(
         params=params,
         structure=PlanarPCSStructure(num_gauss_points=3),
         floating_base=floating_base,
@@ -46,7 +46,7 @@ def _planar_robot(*, floating_base: bool) -> PlanarPCS:
     )
 
 
-def _spatial_robot(*, floating_base: bool) -> PCS:
+def _spatial_robot(*, floating_base: bool, model_type=PCS) -> PCS:
     params = pcs_params(
         length=jnp.array([0.1]),
         radius=jnp.array([0.01]),
@@ -56,7 +56,7 @@ def _spatial_robot(*, floating_base: bool) -> PCS:
         damping_matrix=jnp.eye(6),
         gravity=jnp.array([0.0, 0.0, -9.81]),
     )
-    return PCS(
+    return model_type(
         params=params,
         structure=PCSStructure(num_gauss_points=3),
         floating_base=floating_base,
@@ -200,7 +200,7 @@ def test_fixed_mount_update_and_public_state_projection() -> None:
         floating.with_fixed_base_pose(base_pose)
 
 
-def _gvs_robot(*, floating_base: bool) -> GVS:
+def _gvs_robot(*, floating_base: bool, model_type=GVS) -> GVS:
     params, structure = gvs_params_from_segments(
         [
             GVSSegment(
@@ -221,7 +221,7 @@ def _gvs_robot(*, floating_base: bool) -> GVS:
         ],
         gravity=jnp.array([0.0, 0.0, -9.81]),
     )
-    return GVS(
+    return model_type(
         params=params, structure=structure, floating_base=floating_base, backend="jax"
     )
 
@@ -471,3 +471,37 @@ def test_scalar_jacobian_aliases_share_derivative_routing(
             ):
                 assert_allclose(a, b, rtol=1e-6, atol=1e-8)
         jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_passive_force_override_is_shared_by_forward_and_inverse(factory, enabled):
+    base = factory(floating_base=False)
+    family = type(base)
+
+    def passive_force(self, q, v):
+        return family.passive_force(self, q, v) + 0.2 * jnp.sin(q) + 0.3 * v**3
+
+    model_type = type("CustomPassiveRobot", (family,), {"passive_force": passive_force})
+    robot = factory(floating_base=False, model_type=model_type)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    v = jnp.linspace(0.01, 0.04, robot.num_velocities)
+    a = jnp.full_like(v, 0.1)
+    y = robot.pack_state(q, v)
+
+    def roundtrip(state):
+        q, v, _ = robot.split_state(state)
+        required = robot.inverse_dynamics(q, v, a)
+        result = robot.forward_dynamics(0.0, state, (None, required))
+        return robot.split_state(result)[1]
+
+    jax.clear_caches()
+    with custom_jvp_mode(enabled):
+        actual = jax.jit(roundtrip)(y)
+        primal, direction = jax.jit(
+            lambda y: jax.jvp(roundtrip, (y,), (jnp.ones_like(y),))
+        )(y)
+    assert_allclose(actual, a, rtol=1e-6, atol=1e-8)
+    assert_allclose(primal, a, rtol=1e-6, atol=1e-8)
+    assert_allclose(direction, jnp.zeros_like(a), atol=1e-7)
+    jax.clear_caches()

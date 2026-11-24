@@ -32,6 +32,11 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Fixed
 
+- Enforce analytical derivative opt-in at shared dynamics boundaries, including
+  model extension hooks and accelerated adapters.
+- Honor `passive_force` overrides consistently in forward and inverse dynamics
+  and the explicit PCS state-derivative helpers.
+
 ### Documentation
 
 - Added differentiation recommendations and analytical-support tables covering

@@ -98,27 +98,8 @@ class ForwardDynamicsModel(DynamicsModel, Protocol):
 
         ...
 
-    def elastic_force(self, q: Array) -> Array:
-        """Return the generalized elastic force for ``q``.
-
-        Args:
-            q: Generalized coordinates for one environment.
-
-        Returns:
-            Generalized elastic force vector.
-        """
-
-        ...
-
-    def damping_matrix(self, q: Array) -> Array:
-        """Return the generalized damping matrix for ``q``.
-
-        Args:
-            q: Generalized coordinates for one environment.
-
-        Returns:
-            Generalized damping matrix.
-        """
+    def passive_force(self, q: Array, qd: Array) -> Array:
+        """Return total passive effort on the required-effort side of dynamics."""
 
         ...
 

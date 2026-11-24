@@ -128,6 +128,7 @@ def test_fused_dynamics_state_pushforward_matches_direct_jax_autodiff(
 
 
 @pytest.mark.parametrize("num_segments", [2, 16])
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_directional_jvp_matches_full_analytical_jacobian_matvec(
     num_segments: int,
 ) -> None:
@@ -161,6 +162,7 @@ def test_directional_jvp_matches_full_analytical_jacobian_matvec(
     _assert_trees_allclose(directional, autodiff_full_jacobian)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_large_dense_directional_jvp_matches_direct_jax_autodiff() -> None:
     """Cover the contracted inverse-dynamics route above the fused cutoff."""
     model = benchmark.build_model("full", num_segments=16, gauss_points=5)
@@ -221,6 +223,7 @@ def test_custom_jvp_state_tangent_accepts_optional_inputs(
         "rollout_parameters_jacobian",
     ],
 )
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_rollout_derivative_workloads_match_direct_jax_autodiff(workload: str) -> None:
     model = benchmark.build_model("axial", num_segments=1, gauss_points=5)
     _, reference_fn, inputs = _build_workload(
@@ -287,6 +290,7 @@ def benchmark_case():
         "rollout_loss_checkpointed",
     ],
 )
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_composed_workloads_match_reference(benchmark_case, workload):
     model, inputs = benchmark_case
 
@@ -313,6 +317,7 @@ def test_composed_workloads_match_reference(benchmark_case, workload):
     jax.default_backend() != "cpu", reason="CPU LAPACK factorization inspection"
 )
 @pytest.mark.parametrize("workload", ["mixed_jvp", "state_directions"])
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_compiled_primal_and_tangents_share_one_factorization(benchmark_case, workload):
     model, inputs = benchmark_case
     fn = benchmark.build_workload(

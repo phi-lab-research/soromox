@@ -3,6 +3,10 @@
 Updated 2026-11-23 for PR #198, rebased onto `origin/main` at
 `bfea7c961f84a531aa5ab93a66da461a76469f56`.
 
+This document records the original implementation plan. For the current API,
+autodiff default, analytical opt-in, and workload recommendations, see
+[Differentiation](../user-guide/differentiation.md).
+
 ## Decision and scope
 
 Expose analytical derivatives through ordinary JAX transformations of forward

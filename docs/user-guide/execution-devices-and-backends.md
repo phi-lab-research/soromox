@@ -285,9 +285,11 @@ including nested scalar `vmap` expressions for Cartesian batches.
 
 ## Differentiation
 
-JAX transformations always differentiate the JAX implementation, even when
-the model uses Warp for ordinary primal GPU calls. This applies to accelerated
-kinematics and Jacobians as well as `model.dynamics_terms` and complete
+JAX transformations use ordinary autodiff through the JAX implementation by
+default, even when the model uses Warp for ordinary primal GPU calls. Explicitly
+enabling custom derivatives selects supported analytical rules at the same JAX
+boundary. This applies to accelerated kinematics and Jacobians as well as
+`model.dynamics_terms` and complete
 `forward_dynamics` evaluations.
 
 See [Differentiation](differentiation.md) for mode selection, derivative

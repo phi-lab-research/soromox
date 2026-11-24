@@ -20,7 +20,6 @@ from soromox.actuation.threadlike import (
     ThreadlikeImpedance,
     ThreadlikeRouting,
 )
-from soromox.autodiff import custom_jvp_enabled
 from soromox.execution import (
     DEFAULT_PCS_BLOCK_DIM,
     PCS_ACTUATION,
@@ -4891,8 +4890,6 @@ class PCS(SoftRobot):
 
     def _analytical_dynamics_terms_jvp(self, primals, tangents):
         """Optional hook used after shared shape and backend validation."""
-        if not custom_jvp_enabled():
-            return None
         return _derivatives.terms_jvp(primals, tangents)
 
     @eqx.filter_jit
@@ -5021,7 +5018,7 @@ class PCS(SoftRobot):
         self, primals: tuple[Any, ...], tangents: tuple[Any, ...]
     ) -> tuple[Array, Array] | None:
         """Optional shared-execution hook; return None for unsupported physics."""
-        if not custom_jvp_enabled() or not self._supports_analytical_inertia():
+        if not self._supports_analytical_inertia():
             return None
         return _derivatives.forward_dynamics_jvp(primals, tangents)
 
@@ -5032,27 +5029,12 @@ class PCS(SoftRobot):
         # Split the state vector into configuration and velocity
         q, qd, auxiliary = self.split_state(y)
 
-        # split the actuation arguments if provided
-        if actuation_args is None:
-            u, tau_ext = None, None
-        elif len(actuation_args) == 1:
-            u = actuation_args[0]
-            tau_ext = None
-        elif len(actuation_args) == 2:
-            u, tau_ext = actuation_args
-        else:
-            raise ValueError("actuation_args must be a tuple of length 1 or 2.")
-
-        if u is None:
-            u = jnp.zeros((self.num_actuators,), dtype=y.dtype)
-        if tau_ext is None:
-            tau_ext = jnp.zeros((self.num_velocities,), dtype=y.dtype)
+        u, tau_ext = self._actuation_inputs(actuation_args, y.dtype)
 
         B, Cqd, G = self.dynamics_terms(q, qd, backend="jax")
-        tau_el = self.elastic_force(q)
         tau_u = self.actuation_force(q, u, qd=qd, backend="jax")
 
-        rhs = tau_u + tau_ext - Cqd - G - tau_el - self.damping_matrix(q) @ qd
+        rhs = tau_u + tau_ext - Cqd - G - self.passive_force(q, qd)
 
         factors = _dynamics.factor_inertia(B)
         qdd = _dynamics.solve_factored(factors, rhs)
@@ -6134,7 +6116,7 @@ class PCS(SoftRobot):
 
     def _analytical_inverse_dynamics_jvp(self, primals, tangents):
         """Supply PCS actions to the shared required-effort derivative rule."""
-        if not custom_jvp_enabled() or not self._supports_analytical_inertia():
+        if not self._supports_analytical_inertia():
             return None
         return _derivatives.inverse_dynamics_jvp(primals, tangents)
 
@@ -6287,10 +6269,8 @@ class PCS(SoftRobot):
         dID_dq, dID_dqd = self._inertial_force_jacobians(q, qd, qdd)
 
         def applied_force(q_value, qd_value):
-            return (
-                self._actuation_force(q_value, u, qd_value)
-                - self.elastic_force(q_value)
-                - self.damping_matrix(q_value) @ qd_value
+            return self._actuation_force(q_value, u, qd_value) - self.passive_force(
+                q_value, qd_value
             )
 
         dtau_dq, dtau_dqd = jacfwd(applied_force, argnums=(0, 1))(q, qd)

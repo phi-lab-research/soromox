@@ -301,33 +301,13 @@ def actuation_matrix(self, q: jax.Array) -> jax.Array:
     """
     ...
 
-def forward_dynamics(self, t, y, tau_ext, actuation_args):
-    """
-    State derivatives for simulation: yd = [qdot, vdot]
-
-    Implements the equation of motion for soft robots.
-    """
-    q, v, auxiliary = self.split_state(y)
-    u = actuation_args.get("u", jnp.zeros(self.num_actuators))
-
-    # Dynamic matrices
-    M = self.inertia_matrix(q)
-    C = self.coriolis_matrix(q, v)
-    D = self.damping_matrix(q)
-
-    # Forces
-    tau_el = self.elastic_force(q)
-    tau_g = self.gravitational_force(q)
-    A = self.actuation_matrix(q)
-    tau_act = A @ u
-
-    # Solve for acceleration: M qdd = tau_total
-    tau_total = tau_act + tau_ext - C @ v - D @ v - tau_el - tau_g
-    vdot = jnp.linalg.solve(M, tau_total)
-    qdot = self.configuration_derivative(q, v)
-    auxiliary_dot = jnp.zeros_like(auxiliary)
-
-    return jnp.concatenate([qdot, vdot, auxiliary_dot])
+def _assemble_dynamics_terms(self, q, v):
+    """Return the shared JAX equations for forward and inverse dynamics."""
+    return (
+        self.inertia_matrix(q),
+        self.coriolis_matrix(q, v) @ v,
+        self.gravitational_force(q),
+    )
 ```
 
 **Energy and control consistency:** `coriolis_matrix(q, qd)` must be consistent
@@ -338,6 +318,11 @@ the mechanical energy balance, passivity arguments, and model-based control. It
 also keeps derivative-based APIs consistent. If you override an optimized
 `dynamics_terms(q, qd)` method, its returned `Cqd` vector must equal the
 convective force `C(q, qd) @ qd` for this same convention.
+
+`passive_force(q, qd)` supplies the total elastic and damping effort to both
+forward and inverse dynamics. Override it when adding a combined passive law.
+Implement optimized JAX dynamics terms in `_assemble_dynamics_terms(q, qd)` so
+forward dynamics, inverse dynamics, and their derivatives share the same equations.
 
 #### 6. Implement Energy Methods (Optional but Recommended)
 
@@ -432,10 +417,10 @@ fallback convention used by the dynamics adapters. The base energy hook uses
 this fallback for floating bases and requests involving model parameters.
 
 Kinematics adapters share pose derivative selection across the ordinary JAX
-and accelerated execution paths. Scalar pose, geometric Jacobian, and energy
+and accelerated execution paths. Pose, geometric Jacobian, energy, and dynamics
 adapters check `custom_jvp_enabled()` before invoking optional analytical hooks.
-The PCS dynamics hooks check the same setting alongside their model capability
-checks. Explicit derivative methods retain their specified algorithms.
+Model hooks only decide whether their formulas support the requested physics.
+Explicit derivative methods retain their specified algorithms.
 
 Treat filtered `None` tangents as inactive inputs. Skip their contributions,
 share primal work across active directions, and keep the tangent expression
@@ -492,8 +477,8 @@ def _forward_kinematics_arc_length_derivative(self, q, s):
     return jnp.concatenate([jnp.atleast_1d(kappa_i), R @ sigma_i])
 ```
 
-For the Jacobian custom JVP, the dispatch is split by tangent type. A
-configuration-only tangent uses `jacobian_and_time_derivative(q, qd, s)`. An
+When custom derivatives are enabled, the Jacobian dispatch is split by tangent
+type. A configuration-only tangent uses `jacobian_and_time_derivative(q, qd, s)`. An
 arc-length-only tangent uses `jacobian_and_arc_length_derivative(q, s)`. A mixed
 `q` and `s` tangent falls back to JAX autodiff through `_jacobian`; higher-order
 benchmarks showed that maintaining a fused mixed custom-JVP path was not worth

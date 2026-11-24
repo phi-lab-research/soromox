@@ -404,7 +404,7 @@ def _dynamics_terms_jvp(primals, tangents):
     """Select an analytical term action or differentiate the current equations."""
     model, _, _ = primals
     hook = getattr(model, "_analytical_dynamics_terms_jvp", None)
-    if hook is not None:
+    if custom_jvp_enabled() and hook is not None:
         result = hook(primals, tangents)
         if result is not None:
             return result
@@ -666,7 +666,7 @@ def evaluate_inverse_dynamics(model, q, qd, qdd):
 @evaluate_inverse_dynamics.def_jvp
 def _evaluate_inverse_dynamics_jvp(primals, tangents):
     hook = getattr(primals[0], "_analytical_inverse_dynamics_jvp", None)
-    if hook is not None:
+    if custom_jvp_enabled() and hook is not None:
         result = hook(primals, tangents)
         if result is not None:
             return result
@@ -689,7 +689,7 @@ def evaluate_forward_dynamics(
     """Evaluate compiled forward dynamics with transform-aware backend routing.
 
     Primal calls use the configured backend. During differentiation an
-    optional model hook supplies an analytical JVP for supported physics;
+    explicitly enabled model hook supplies an analytical JVP for supported physics;
     returning None selects autodiff through the current JAX equations.
     Both derivative routes avoid staging forward-only Warp callbacks.
 
@@ -754,7 +754,7 @@ def _evaluate_forward_dynamics_jvp(
             capabilities_tangent,
         ) = tangents
     analytical_jvp = getattr(model, "_analytical_forward_dynamics_jvp", None)
-    if analytical_jvp is not None:
+    if custom_jvp_enabled() and analytical_jvp is not None:
         result = analytical_jvp(
             (model, t, y, actuation_args),
             (model_tangent, t_tangent, y_tangent, actuation_tangent),
@@ -836,7 +836,6 @@ def _assemble_forward_dynamics(
     if tau_ext is None:
         tau_ext = jnp.zeros((model.num_velocities,), dtype=y.dtype)
 
-    elastic = model.elastic_force(q)
     fused = None
     if capabilities is not None:
         from soromox.execution.dispatch import (
@@ -860,14 +859,7 @@ def _assemble_forward_dynamics(
         actuation = model.actuation_force(q, u, qd=qd, backend=actuation_backend)
     else:
         inertia, coriolis_qd, gravity, actuation = fused
-    rhs = (
-        actuation
-        + tau_ext
-        - coriolis_qd
-        - gravity
-        - elastic
-        - model.damping_matrix(q) @ qd
-    )
+    rhs = actuation + tau_ext - coriolis_qd - gravity - model.passive_force(q, qd)
     qdd = model._solve_inertia(inertia, rhs)
     qdot = model.configuration_derivative(q, qd)
     if model.num_auxiliary_states == 0:

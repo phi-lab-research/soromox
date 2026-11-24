@@ -85,6 +85,9 @@ class _TransformProbe(eqx.Module):
 
         return jnp.zeros((q.size, q.size), dtype=q.dtype)
 
+    def passive_force(self, q: Array, qd: Array) -> Array:
+        return self.elastic_force(q) + self.damping_matrix(q) @ qd
+
     def actuation_force(
         self,
         q: Array,
@@ -400,4 +403,100 @@ def test_scalar_inertial_jacobian_mode_across_execution_boundaries(
     assert bool(calls) == enabled
     for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
         assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("transform", ["jvp", "grad"])
+@pytest.mark.parametrize(
+    "operation", ["jax_terms", "accelerated_terms", "forward", "inverse"]
+)
+def test_dynamics_boundaries_own_derivative_mode(
+    enabled, transform, operation, monkeypatch
+):
+    """Model hooks need no copy of the process-wide mode policy."""
+    from soromox.execution.transforms import (
+        _assemble_forward_dynamics,
+        evaluate_inverse_dynamics,
+        evaluate_jax_dynamics_terms,
+    )
+
+    model = _TransformProbe(scale=jnp.array(2.0))
+    q = jnp.array([0.1, -0.2, 0.3])
+    v = jnp.array([-0.2, 0.3, 0.1])
+    point = jnp.concatenate((q, v)) if operation == "forward" else q
+    calls = []
+    if operation == "forward":
+
+        def raw(model, t, y, args):
+            return _assemble_forward_dynamics(
+                model, t, y, args, backend="jax", capabilities=None
+            )
+
+        def public(x):
+            return evaluate_forward_dynamics(model, 0.0, x, None, "jax")
+
+        def reference(x):
+            return raw(model, 0.0, x, None)
+
+        hook_name = "_analytical_forward_dynamics_jvp"
+    elif operation == "inverse":
+
+        def inverse(self, q, v, a):
+            mass, convective, gravity = self._assemble_dynamics_terms(q, v)
+            return mass @ a + convective + gravity
+
+        monkeypatch.setattr(
+            _TransformProbe, "_inverse_dynamics", inverse, raising=False
+        )
+        raw = inverse
+
+        def public(x):
+            return evaluate_inverse_dynamics(model, x, v, v)
+
+        def reference(x):
+            return raw(model, x, v, v)
+
+        hook_name = "_analytical_inverse_dynamics_jvp"
+    else:
+
+        def raw(model, q, v):
+            return model._assemble_dynamics_terms(q, v)
+
+        evaluator = evaluate_jax_dynamics_terms
+        if operation == "accelerated_terms":
+
+            def forbidden_executor(*args):
+                raise AssertionError("derivative staged the accelerated primal")
+
+            evaluator = make_dynamics_evaluator(forbidden_executor, family_name="test")
+
+        def public(x):
+            return evaluator(model, x, v)
+
+        def reference(x):
+            return raw(model, x, v)
+
+        hook_name = "_analytical_dynamics_terms_jvp"
+
+    def hook(self, primals, tangents):
+        calls.append(True)
+        return eqx.filter_jvp(raw, primals, tangents)
+
+    monkeypatch.setattr(_TransformProbe, hook_name, hook, raising=False)
+
+    def differentiate(fn):
+        if transform == "jvp":
+            return jax.jit(lambda x: jax.jvp(fn, (x,), (jnp.ones_like(x),)))(point)
+        return jax.jit(
+            jax.grad(lambda x: sum(jnp.sum(a) for a in jax.tree.leaves(fn(x))))
+        )(point)
+
+    jax.clear_caches()
+    with custom_jvp_mode(enabled):
+        actual = differentiate(public)
+        expected = differentiate(reference)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    assert bool(calls) is enabled
     jax.clear_caches()
