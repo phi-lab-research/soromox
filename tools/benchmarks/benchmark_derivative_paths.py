@@ -88,9 +88,9 @@ def _kinetic_energy_gradient_from_tangent(
     q_basis = _basis_like(q)
     qd_basis = _basis_like(qd)
     dT_dq = jax.vmap(
-        lambda q_tangent: system._kinetic_energy_jvp_tangent(q, qd, q_tangent, None)
+        lambda q_tangent: system._kinetic_energy_q_jvp_tangent(q, qd, q_tangent)
     )(q_basis)
-    dT_dqd = jax.vmap(lambda qdd: system._kinetic_energy_jvp_tangent(q, qd, None, qdd))(
+    dT_dqd = jax.vmap(lambda qdd: system._kinetic_energy_qd_jvp_tangent(q, qd, qdd))(
         qd_basis
     )
     return dT_dq, dT_dqd
@@ -99,15 +99,8 @@ def _kinetic_energy_gradient_from_tangent(
 def _total_energy_gradient_from_tangent(
     system: SoftRobot, q: Array, qd: Array
 ) -> tuple[Array, Array]:
-    q_basis = _basis_like(q)
-    qd_basis = _basis_like(qd)
-    dE_dq = jax.vmap(
-        lambda q_tangent: system._total_energy_jvp_tangent(q, qd, q_tangent, None)
-    )(q_basis)
-    dE_dqd = jax.vmap(lambda qdd: system._total_energy_jvp_tangent(q, qd, None, qdd))(
-        qd_basis
-    )
-    return dE_dq, dE_dqd
+    dT_dq, dT_dqd = _kinetic_energy_gradient_from_tangent(system, q, qd)
+    return dT_dq + system._potential_energy_gradient(q), dT_dqd
 
 
 def _direct_jacobian(system: SoftRobot, ctx: Mapping[str, Array]) -> Array:
