@@ -407,8 +407,15 @@ Keep three responsibilities separate:
 
 - Public system methods forward to the shared execution adapters.
 - Protected model hooks provide primal equations and analytical recurrences.
-- Shared mathematical composition lives in `systems/_dynamics.py` and
-  `systems/_energy.py`.
+- Shared mathematical composition lives in `systems/_kinematics.py`,
+  `systems/_dynamics.py`, and `systems/_energy.py`.
+
+Every optional model action uses the same `(primals, tangents)` interface and
+returns either `(value, direction)` or `None` for autodiff. `SoftRobot` declares
+`_analytical_forward_kinematics_jvp`, `_analytical_jacobian_jvp`,
+`_analytical_dynamics_terms_jvp`, `_analytical_forward_dynamics_jvp`,
+`_analytical_inverse_dynamics_jvp`, and `_analytical_energy_jvp`.
+Models supply physical recurrences; shared modules compose active directions.
 
 Energy methods share one adapter, `evaluate_energy`, with a static energy kind.
 Its optional `_analytical_energy_jvp` hook composes force and inertia actions.
@@ -492,11 +499,9 @@ The `_forward_kinematics_arc_length_jvp` hook selects this action; GVS overrides
 it to use AD of the scalar pose recurrence. Explicit analytical arc-length
 helpers keep their specified algorithms.
 
-Kinetic energy and its velocity action share `_kinetic_energy_inertia_matrix`.
-This hook must use JAX equations without execution-backend dispatch. Continuum
-models select inertia from their protected dynamics assembly so unused force
-outputs can be pruned. The same inertia source in primal and tangent code lets
-compilation share the assembly. Gravity energy has its own
+Kinetic energy and its velocity action both call `inertia_matrix(q)`. Continuum
+models select this matrix from their protected dynamics assembly with zero
+velocity so unused force outputs can be pruned. The same matrix call in primal and tangent code lets compilation share the assembly. Gravity energy has its own
 `_gravitational_energy_q_jvp_tangent` hook: PCS uses AD of the scalar potential.
 Potential and total energy compose that action with the elastic and kinetic
 contributions.

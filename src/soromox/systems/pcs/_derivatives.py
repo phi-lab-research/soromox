@@ -1,62 +1,52 @@
 """PCS recurrence selection for shared dynamics derivative composition."""
 
-import jax
-import jax.numpy as jnp
+from __future__ import annotations
 
-from soromox.actuation.core import DirectEffort, IdentityActuator, IdentityTransmission
-from soromox.actuation.threadlike import ThreadlikeActuator, ThreadlikeRouting
+from collections.abc import Callable
+from functools import partial
+from typing import TYPE_CHECKING
+
+import jax
+from jax import Array
+
 from soromox.systems import _dynamics
-from soromox.systems._dynamics import ad_terms_jvp, has_tangent, instantiate
+from soromox.systems._dynamics import has_tangent
+
+if TYPE_CHECKING:
+    from soromox.systems.pcs.pcs import PCS
 
 FUSED_STATE_MAX_VELOCITIES = 64
 
 
-def supports_analytical_actuator(actuator) -> bool:
-    """The closed form assumes direct effort and a frictionless fixed route."""
-    return type(actuator.effort_model) is DirectEffort and (
-        (
-            type(actuator) is IdentityActuator
-            and type(actuator.transmission) is IdentityTransmission
-        )
-        or (
-            type(actuator) is ThreadlikeActuator
-            and type(actuator.transmission.routing) is ThreadlikeRouting
-            and actuator.transmission.friction.is_frictionless
-        )
+def terms_jvp(primals: _dynamics.TermsPrimals, tangents: _dynamics.TermsTangents):
+    """Supply the supported PCS recurrence to shared term composition.
+
+    Args:
+        primals: PCS model, configuration, and generalized velocity.
+        tangents: Corresponding filtered model and state directions.
+
+    Returns:
+        Dynamics terms and their directional derivatives.
+    """
+    robot = primals[0]
+    action = (
+        robot._dynamics_terms_with_state_pushforward
+        if robot._supports_analytical_inertia()
+        else None
     )
+    return _dynamics.terms_jvp(primals, tangents, state_action=action)
 
 
-def terms_jvp(primals, tangents):
-    """Share the primal assembly for mixed state and model-parameter tangents."""
-    robot, q, v = primals
-    drobot, dq, dv = tangents
-    if (
-        has_tangent(drobot)
-        or not robot._supports_analytical_inertia()
-        or (dq is None and dv is not None)
-    ):
-        # With configuration held fixed, AD can omit configuration recurrence,
-        # gravity derivatives, and inertia derivatives entirely.
-        return ad_terms_jvp(primals, tangents)
-    if dq is None and dv is None:
-        values = robot._assemble_dynamics_terms(q, v)
-        return values, jax.tree.map(jnp.zeros_like, values)
-    values = robot._dynamics_terms_with_state_pushforward(
-        q, v, instantiate(dq, q), instantiate(dv, v)
-    )
-    return values[:3], values[3:]
+def _force_action(robot: PCS) -> _dynamics.ForceStateAction:
+    """Bind the PCS material, actuation, and passive state actions.
 
+    Args:
+        robot: Fixed-base PCS model supporting the state recurrences.
 
-def _inertial_action(robot):
-    def action(q, v, acceleration, dq, dv):
-        return robot._inertial_force_state_pushforward(
-            q, v, acceleration, dq[:, None], dv[:, None]
-        )[:, 0]
+    Returns:
+        Callable accepting ``q, v, u, dq, dv`` and returning net applied-force direction.
+    """
 
-    return action
-
-
-def _force_action(robot):
     def action(q, v, u, dq, dv):
         return (
             -robot.K_active @ dq
@@ -68,7 +58,19 @@ def _force_action(robot):
     return action
 
 
-def _select_rule(compose, primals, tangents, *, forward):
+def _select_rule(compose: Callable, primals: tuple, tangents: tuple, *, forward: bool):
+    """Select the PCS recurrence for the requested inputs and compilation target.
+
+    Args:
+        compose: Shared forward- or inverse-dynamics composition.
+        primals: Model and arguments of the requested dynamics operation.
+        tangents: Corresponding filtered directions.
+        forward: Whether the request is forward dynamics.
+
+    Returns:
+        Primal output and its direction. Large CPU requests use a contracted
+        recurrence; accelerators use the shared term action.
+    """
     robot = primals[0]
     parameter_active = has_tangent(tangents[0])
     state_active = (
@@ -87,7 +89,10 @@ def _select_rule(compose, primals, tangents, *, forward):
             cpu=lambda: compose(
                 primals,
                 tangents,
-                inertial_state_action=_inertial_action(robot),
+                inertial_state_action=partial(
+                    _dynamics.inertial_state_action,
+                    robot._inertial_force_state_pushforward,
+                ),
                 **force_options,
             ),
             default=lambda: compose(primals, tangents),
@@ -95,11 +100,33 @@ def _select_rule(compose, primals, tangents, *, forward):
     return compose(primals, tangents, terms_action=terms_jvp, **force_options)
 
 
-def forward_dynamics_jvp(primals, tangents):
+def forward_dynamics_jvp(
+    primals: _dynamics.ForwardPrimals, tangents: _dynamics.ForwardTangents
+) -> tuple[Array, Array]:
+    """Supply PCS actions to forward-dynamics composition.
+
+    Args:
+        primals: Model, time, packed state, and optional actuation arguments.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Packed state derivative and its direction.
+    """
     return _select_rule(_dynamics.forward_dynamics_jvp, primals, tangents, forward=True)
 
 
-def inverse_dynamics_jvp(primals, tangents):
+def inverse_dynamics_jvp(
+    primals: _dynamics.InversePrimals, tangents: _dynamics.InverseTangents
+) -> tuple[Array, Array]:
+    """Supply PCS actions to inverse-dynamics composition.
+
+    Args:
+        primals: Model, configuration, velocity, and acceleration.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Required generalized effort and its direction.
+    """
     return _select_rule(
         _dynamics.inverse_dynamics_jvp, primals, tangents, forward=False
     )

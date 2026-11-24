@@ -99,8 +99,8 @@ class ComputedTorqueTracker(ClosedFormModelBasedController):
 
         Args:
             robot: The soft robot system to be controlled.
-                Must have `actuation_matrix(q)`, `dynamics_terms(q, qd)`,
-                `elastic_force(q)`, and `damping_matrix(q)` methods.
+                Must have `actuation_matrix(q)` and
+                `inverse_dynamics(q, qd, qdd)` methods.
             reference_trajectory: The desired trajectory to track.
                 Must provide x_des_fn (desired configuration), xd_des_fn
                 (desired velocity), and xdd_des_fn (desired acceleration)
@@ -200,15 +200,7 @@ class ComputedTorqueTracker(ClosedFormModelBasedController):
         assert self.reference_trajectory.xdd_des_fn is not None
         qdd_des = self.reference_trajectory.xdd_des_fn(t)
 
-        # Compute the coupled dynamics terms at the current state. The returned
-        # Coriolis term is already contracted with the supplied velocity.
-        M, Cqd, G = robot.dynamics_terms(q, qd)
-        tau_el = robot.elastic_force(q)
-        D = robot.damping_matrix(q)
-
-        # Compute the inverse dynamics: cancel all forces and apply desired acceleration
-        # tau = M(q) @ qdd_des + C(q, qd) @ qd + G(q) + tau_el(q) + D(q) @ qd
-        tau_model = M @ qdd_des + Cqd + G + tau_el + D @ qd
+        tau_model = robot.inverse_dynamics(q, qd, qdd_des)
 
         # Get the actuation matrix at current configuration
         A = robot.actuation_matrix(q)

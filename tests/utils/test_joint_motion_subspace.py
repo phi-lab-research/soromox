@@ -16,8 +16,12 @@ from soromox.utils.lie_algebra import se3
 jax.config.update("jax_enable_x64", True)
 
 
-@pytest.mark.parametrize("rotation", [1.0e-5, 1.0e-1])
-def test_joint_motion_subspace_derivatives_match_autodiff(rotation: float) -> None:
+@pytest.mark.parametrize(
+    "rotation, eps", [(1e-5, 1e-16), (1e-1, 1e-16), (1e-5, 0.1), (0.0, 0.1)]
+)
+def test_joint_motion_subspace_derivatives_match_autodiff(
+    rotation: float, eps: float
+) -> None:
     """Exercise both the stable-series and closed-form derivative branches."""
     interval_length = jnp.array(1.0, dtype=jnp.float64)
     strain_basis = jnp.eye(6, dtype=jnp.float64)
@@ -26,13 +30,13 @@ def test_joint_motion_subspace_derivatives_match_autodiff(rotation: float) -> No
     qd = jnp.array([0.2, -0.3, 0.4, -0.1, 0.5, -0.2])
     qdd = jnp.array([-0.4, 0.1, 0.3, 0.2, -0.2, 0.6])
     wrench = jnp.array([0.3, -0.2, 0.1, -0.4, 0.6, -0.5])
-    eps = jnp.finfo(q.dtype).eps
+    reference_eps = jnp.finfo(q.dtype).eps
 
     def motion_subspace(q_value: jax.Array) -> jax.Array:
         integrated_strain = interval_length * (
             strain_basis @ q_value + reference_strain
         )
-        return se3.left_jacobian(integrated_strain, eps) @ (
+        return se3.left_jacobian(integrated_strain, reference_eps) @ (
             interval_length * strain_basis
         )
 
@@ -41,7 +45,7 @@ def test_joint_motion_subspace_derivatives_match_autodiff(rotation: float) -> No
 
     expected_transform = se3.exp(
         interval_length * (strain_basis @ q + reference_strain),
-        eps=eps,
+        eps=reference_eps,
     )
     expected_subspace = motion_subspace(q)
     expected_subspace_dot = motion_subspace_dot(q)

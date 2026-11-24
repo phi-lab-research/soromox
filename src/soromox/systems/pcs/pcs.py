@@ -7,6 +7,7 @@ import equinox as eqx
 from jax import Array, jacfwd, jvp, lax, tree_util, vmap
 from jax import numpy as jnp
 
+from soromox.actuation._derivatives import supports_analytical_actuator
 from soromox.actuation.core import Actuator, IdentityActuator, PassiveElement
 from soromox.actuation.friction import (
     ThreadlikeFriction,
@@ -2837,19 +2838,9 @@ class PCS(SoftRobot):
         Returns:
             B (Array): Inertia matrix of shape (num_active_strains, num_active_strains).
         """
-        if self._has_custom_inertia:
-            return self._assemble_dynamics_terms(
-                q, jnp.zeros(self.num_velocities, dtype=q.dtype)
-            )[0]
-
-        if self.floating_base:
-            zeros = jnp.zeros((self.num_velocities,), dtype=q.dtype)
-            return self._assemble_dynamics_terms(q, zeros)[0]
-        B_full = self._inertia_full_matrix(q)
-
-        B = self.B_xi.T @ B_full @ self.B_xi
-
-        return B
+        return self._assemble_dynamics_terms(
+            q, jnp.zeros((self.num_velocities,), dtype=q.dtype)
+        )[0]
 
     @eqx.filter_jit
     def _coriolis_full_matrix(self, q: Array, qd: Array) -> Array:
@@ -3610,11 +3601,11 @@ class PCS(SoftRobot):
         start = 0
         for actuator in self.actuators:
             stop = start + actuator.num_channels
-            if isinstance(
-                actuator, IdentityActuator
-            ) and _derivatives.supports_analytical_actuator(actuator):
+            if isinstance(actuator, IdentityActuator) and supports_analytical_actuator(
+                actuator
+            ):
                 pass
-            elif _derivatives.supports_analytical_actuator(actuator):
+            elif supports_analytical_actuator(actuator):
                 moment_matrix_tangent = (
                     self._threadlike_moment_matrix_state_pushforward(
                         q,
@@ -3675,10 +3666,7 @@ class PCS(SoftRobot):
             ):
 
                 def component_force(position, velocity, element=element):
-                    return (
-                        -element.elastic_force(self, position)
-                        - element.damping_matrix(self, position) @ velocity
-                    )
+                    return -element.passive_force(self, position, velocity)
 
                 force_tangent = (
                     force_tangent
@@ -3810,12 +3798,16 @@ class PCS(SoftRobot):
         )
 
     def _gravitational_energy_q_jvp_tangent(self, q: Array, dq: Array) -> Array:
-        """Differentiate scalar potential without assembling quadrature Jacobians."""
-        return jvp(self._gravitational_energy, (q,), (dq,))[1]
+        """Differentiate scalar gravitational energy for a configuration direction.
 
-    def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
-        """Reuse the protected JAX dynamics assembly; unused force outputs are pruned."""
-        return self._assemble_dynamics_terms(q, qd)[0]
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            dq: Configuration direction with the shape of ``q``.
+
+        Returns:
+            Scalar gravitational-energy direction.
+        """
+        return jvp(self._gravitational_energy, (q,), (dq,))[1]
 
     @eqx.filter_jit
     def _gravitational_energy(self, q: Array) -> Array:
@@ -4889,7 +4881,15 @@ class PCS(SoftRobot):
         )
 
     def _analytical_dynamics_terms_jvp(self, primals, tangents):
-        """Optional hook used after shared shape and backend validation."""
+        """Supply supported PCS term actions to the shared derivative boundary.
+
+        Args:
+            primals: Model, configuration, and generalized velocity.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            Primal dynamics terms and their directional derivatives.
+        """
         return _derivatives.terms_jvp(primals, tangents)
 
     @eqx.filter_jit
@@ -4988,7 +4988,11 @@ class PCS(SoftRobot):
         )
 
     def _supports_analytical_inertia(self) -> bool:
-        """Whether the spatial recurrences cover this model's inertia and state."""
+        """Check whether the spatial recurrence covers this model.
+
+        Returns:
+            Whether the model is standard fixed-base PCS without custom inertia.
+        """
         return (
             type(self) is PCS
             and not self.floating_base
@@ -4996,18 +5000,15 @@ class PCS(SoftRobot):
         )
 
     def _supports_analytical_dynamics(self) -> bool:
-        """Whether the original PCS recurrences cover this model's physics.
+        """Check support for explicit full-Jacobian recurrences.
 
-        False selects a fallback for explicit full-Jacobian helpers. Product
-        rules can still retain analytical inertia and differentiate only the
-        unsupported force components. Floating states and custom inertia use
-        the current JAX equations. This check never tests tangent values.
+        Returns:
+            Whether inertia, actuator laws, and passive elements support the dedicated
+            state recurrences. Product rules may use local autodiff for unsupported forces.
         """
         return (
             self._supports_analytical_inertia()
-            and all(
-                _derivatives.supports_analytical_actuator(a) for a in self.actuators
-            )
+            and all(supports_analytical_actuator(a) for a in self.actuators)
             and all(
                 type(e) is ThreadlikeImpedance and type(e.routing) is ThreadlikeRouting
                 for e in self.passive_elements
@@ -5017,13 +5018,30 @@ class PCS(SoftRobot):
     def _analytical_forward_dynamics_jvp(
         self, primals: tuple[Any, ...], tangents: tuple[Any, ...]
     ) -> tuple[Array, Array] | None:
-        """Optional shared-execution hook; return None for unsupported physics."""
+        """Supply supported PCS actions to forward-dynamics composition.
+
+        Args:
+            primals: Model, time, packed state, and optional actuation arguments.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            Packed output and direction, or ``None`` for unsupported inertia or state layouts.
+        """
         if not self._supports_analytical_inertia():
             return None
         return _derivatives.forward_dynamics_jvp(primals, tangents)
 
     def _forward_dynamics_with_factors(self, t, y, actuation_args=None):
-        """Prepare the primal and reusable factors for explicit Jacobian helpers."""
+        """Evaluate forward dynamics and retain factors for explicit Jacobians.
+
+        Args:
+            t: Integration time.
+            y: Packed configuration and generalized velocity.
+            actuation_args: Optional control and external-effort tuple.
+
+        Returns:
+            State derivative, inertia matrix, and reusable inertia factors.
+        """
         del t
 
         # Split the state vector into configuration and velocity
@@ -5123,7 +5141,18 @@ class PCS(SoftRobot):
         Array,
         Array,
     ]:
-        """Evaluate interval-local quantities shared by both derivative passes."""
+        """Evaluate local kinematics shared by the inertial derivative passes.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qdd: Generalized acceleration, shape ``(num_velocities,)``.
+
+        Returns:
+            Tuple of segment indices, interval lengths, mass weights, local poses,
+            motion subspaces and time derivatives, twist/acceleration Jacobians,
+            and inverse adjoints. Each array has a leading quadrature-interval axis.
+        """
         Xs_nodes, Ws_nodes = vmap(
             scale_gaussian_quadrature,
             in_axes=(None, None, 0, 0),
@@ -5166,7 +5195,12 @@ class PCS(SoftRobot):
         )
 
     def _segment_local_dof_layout(self) -> tuple[Array, Array]:
-        """Return padded segment-local active-DOF indices and their mask."""
+        """Build the padded segment-local coordinate layout.
+
+        Returns:
+            Integer coordinate indices and validity masks, each of shape
+            ``(num_segments, max_local_dofs)``.
+        """
         dof_starts = (0, *self._segment_dof_ends[:-1])
         dof_counts = tuple(
             end - start
@@ -5526,7 +5560,20 @@ class PCS(SoftRobot):
         Array,
         Array,
     ]:
-        """Propagate primal kinematics and contracted state directions."""
+        """Propagate primal kinematics and contracted state directions.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qdd: Generalized acceleration, shape ``(num_velocities,)``.
+            q_directions: Configuration direction columns, shape ``(nq, k)``.
+            qd_directions: Velocity direction columns, shape ``(nv, k)``.
+
+        Returns:
+            Interval arrays for segment indices, weights, gravity, velocity and
+            acceleration twists, their pose/state directions, inverse adjoints,
+            motion subspaces, subspace directions, and local pose directions.
+        """
         Xs_nodes, Ws_nodes = vmap(
             scale_gaussian_quadrature,
             in_axes=(None, None, 0, 0),
@@ -6115,7 +6162,15 @@ class PCS(SoftRobot):
         return dID
 
     def _analytical_inverse_dynamics_jvp(self, primals, tangents):
-        """Supply PCS actions to the shared required-effort derivative rule."""
+        """Supply supported PCS actions to inverse-dynamics composition.
+
+        Args:
+            primals: Model, configuration, velocity, and acceleration.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            Required effort and direction, or ``None`` for unsupported inertia or state layouts.
+        """
         if not self._supports_analytical_inertia():
             return None
         return _derivatives.inverse_dynamics_jvp(primals, tangents)
@@ -6265,7 +6320,20 @@ class PCS(SoftRobot):
         mass_matrix: Array,
         factors=None,
     ) -> tuple[Array, Array]:
-        """Return state derivatives while reusing an assembled inertia matrix."""
+        """Compute acceleration state derivatives using shared inertia factors.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qdd: Generalized acceleration, shape ``(num_velocities,)``.
+            u: Actuator controls, shape ``(num_actuators,)``.
+            mass_matrix: Inertia matrix, shape ``(nv, nv)``.
+            factors: Optional previously computed inertia factors.
+
+        Returns:
+            Configuration and velocity Jacobians of acceleration, with shapes
+            ``(nv, nq)`` and ``(nv, nv)``.
+        """
         dID_dq, dID_dqd = self._inertial_force_jacobians(q, qd, qdd)
 
         def applied_force(q_value, qd_value):
@@ -6320,7 +6388,18 @@ class PCS(SoftRobot):
         qd: Array | None = None,
         factors=None,
     ) -> tuple[Array, Array]:
-        """Return input derivatives while reusing an assembled inertia matrix."""
+        """Compute acceleration input derivatives using shared inertia factors.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            mass_matrix: Inertia matrix, shape ``(nv, nv)``.
+            u: Optional controls; defaults to zero.
+            qd: Optional velocity; defaults to zero.
+            factors: Optional previously computed inertia factors.
+
+        Returns:
+            Acceleration Jacobians with respect to controls and external generalized effort.
+        """
         factors = _dynamics.factor_inertia(mass_matrix) if factors is None else factors
         derivatives = _dynamics.solve_factored(
             factors,

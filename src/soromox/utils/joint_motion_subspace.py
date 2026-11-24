@@ -70,7 +70,8 @@ def joint_motion_subspace_with_derivatives(
 
     k = Omega[:3]
     kd = Omegad[:3]
-    theta = jnp.maximum(safe_norm(Omega[:3]), eps)
+    rotation_norm = safe_norm(Omega[:3])
+    theta = jnp.maximum(rotation_norm, eps)
     thetad = (kd @ k) / theta
 
     Omegahat = se3.hat(Omega)
@@ -190,7 +191,7 @@ def joint_motion_subspace_with_derivatives(
         return (f, fd, fdd, g, T, Td)
 
     f, fd, fdd, g, T, Td = lax.cond(
-        theta <= _THETA_SERIES_THRESHOLD,
+        rotation_norm <= _THETA_SERIES_THRESHOLD,
         lambda _: _g_series_branch(),
         lambda _: _g_general_branch(theta),
         operand=None,
@@ -368,7 +369,7 @@ def joint_motion_subspace_with_derivatives(
         )
 
     dSdq_qd, dSdq_qdd, dSddq_qd = lax.cond(
-        theta <= _THETA_SERIES_THRESHOLD,
+        rotation_norm <= _THETA_SERIES_THRESHOLD,
         lambda _: _S_series_branch(),
         lambda _: _S_general_branch(theta),
         operand=None,
@@ -401,7 +402,8 @@ def joint_dSdq_qd(H, B_xi, xi_ref, q, qd, eps) -> Array:
     Z = H * B_xi
     Omegad = Z @ qd
 
-    theta = jnp.maximum(safe_norm(Omega[:3]), eps)
+    rotation_norm = safe_norm(Omega[:3])
+    theta = jnp.maximum(rotation_norm, eps)
 
     # Powers of ad_Omega
     adjOmega = se3.small_adjoint(Omega)
@@ -495,7 +497,7 @@ def joint_dSdq_qd(H, B_xi, xi_ref, q, qd, eps) -> Array:
         return result
 
     return lax.cond(
-        theta <= _THETA_SERIES_THRESHOLD,
+        rotation_norm <= _THETA_SERIES_THRESHOLD,
         _series_branch,
         _general_branch,
         operand=theta,
@@ -526,7 +528,8 @@ def joint_dSTF_dq(H, B_xi, xi_ref, q, wrench, eps) -> Array:
     xi = B_xi @ q + xi_ref
     Omega = H * xi
     Z = H * B_xi
-    theta = jnp.maximum(safe_norm(Omega[:3]), eps)
+    rotation_norm = safe_norm(Omega[:3])
+    theta = jnp.maximum(rotation_norm, eps)
 
     adjOmega = se3.small_adjoint(Omega)
     adjOmegap2 = adjOmega @ adjOmega
@@ -613,7 +616,7 @@ def joint_dSTF_dq(H, B_xi, xi_ref, q, wrench, eps) -> Array:
         return result
 
     return lax.cond(
-        theta <= _THETA_SERIES_THRESHOLD,
+        rotation_norm <= _THETA_SERIES_THRESHOLD,
         series_branch,
         general_branch,
         operand=theta,
@@ -652,7 +655,8 @@ def joint_dSTF_dq_direction(
     xi = B_xi @ q + xi_ref
     Omega = H * xi
     Z = H * B_xi
-    theta = jnp.maximum(safe_norm(Omega[:3]), eps)
+    rotation_norm = safe_norm(Omega[:3])
+    theta = jnp.maximum(rotation_norm, eps)
 
     adjOmega = se3.small_adjoint(Omega)
     adjOmegap2 = adjOmega @ adjOmega
@@ -746,7 +750,7 @@ def joint_dSTF_dq_direction(
         return result
 
     return lax.cond(
-        theta <= _THETA_SERIES_THRESHOLD,
+        rotation_norm <= _THETA_SERIES_THRESHOLD,
         series_branch,
         general_branch,
         operand=theta,

@@ -1,7 +1,7 @@
 # Differentiation
 
 Use JAX transformations on SoRoMoX system methods to obtain derivatives of
-kinematics, energies, dynamics, and simulated trajectories. The same interface
+kinematics, dynamics, energies, and simulated trajectories. The same interface
 supports state, control, and continuous model-parameter derivatives.
 
 ## Choosing a derivative representation
@@ -48,23 +48,6 @@ substantially between the two transformations.
 below.** Choose by the differentiated quantity: a dynamics recommendation does
 not determine the best mode for a pose, geometric Jacobian, or scalar energy.
 
-### Dynamics gradients
-
-| Query or workload | CPU | GPU |
-|---|---|---|
-| Large, full-strain PCS forward dynamics: full state Jacobian | Custom derivatives | Autodiff |
-| Large, full-strain PCS forward dynamics: state JVP or VJP | Custom derivatives | Autodiff |
-| Small or reduced-strain models | Autodiff | Autodiff |
-| Control-only gradients | Autodiff | Autodiff |
-| Mixed state/control/parameter gradients | Autodiff | Autodiff |
-| Gradients of rollout losses | Autodiff | Autodiff |
-| Other models and derivative queries | Autodiff | Autodiff |
-
-These recommendations use the current PCS forward-dynamics measurements. The
-large full-strain case has 96 velocities; this is an example, not a prescribed
-size threshold. Measurement conditions and complete results are in the
-[derivative comparison](https://github.com/phi-lab-research/soromox/pull/261).
-
 ### Kinematics gradients
 
 | Query or workload | CPU | GPU |
@@ -89,6 +72,23 @@ custom mode. GVS uses AD of its pose recurrence. The equivalent scalar methods
 the Jacobian output of scalar pose/Jacobian queries. Specialized spatial batches
 retain their own traversal and AD rules.
 
+### Dynamics gradients
+
+| Query or workload | CPU | GPU |
+|---|---|---|
+| Large, full-strain PCS forward dynamics: full state Jacobian | Custom derivatives | Autodiff |
+| Large, full-strain PCS forward dynamics: state JVP or VJP | Custom derivatives | Autodiff |
+| Small or reduced-strain models | Autodiff | Autodiff |
+| Control-only gradients | Autodiff | Autodiff |
+| Mixed state/control/parameter gradients | Autodiff | Autodiff |
+| Gradients of rollout losses | Autodiff | Autodiff |
+| Other models and derivative queries | Autodiff | Autodiff |
+
+These recommendations use the current PCS forward-dynamics measurements. The
+large full-strain case has 96 velocities; this is an example, not a prescribed
+size threshold. Measurement conditions and complete results are in the
+[derivative comparison](https://github.com/phi-lab-research/soromox/pull/261).
+
 ### Energy gradients
 
 | Query or workload | CPU | GPU |
@@ -100,8 +100,8 @@ retain their own traversal and AD rules.
 
 Energy rules compose by contribution. PCS uses AD for gravitational energy,
 including its contribution to potential and total energy, and retains the
-kinetic and elastic rules. Kinetic energy and its velocity derivative share a
-protected JAX inertia source; these queries do not launch Warp dynamics kernels.
+kinetic and elastic rules. Kinetic energy and its velocity derivative share the
+`inertia_matrix()` computation; these queries do not launch Warp dynamics kernels.
 The shared inertia optimization also accelerates ordinary autodiff. With the
 remaining gains close or mixed, use autodiff for energy gradients. The custom
 rules remain available, and their coverage is listed below.
@@ -141,8 +141,16 @@ tracing. `set_custom_jvp_enabled(False)` restores autodiff. Custom mode combines
 selected analytical rules with AD fallbacks; it does not force every derivative
 to use an analytical formula.
 
-The runnable [derivative-mode example](examples.md#differentiation-examples)
-shows the default and the explicit opt-in on a PCS state JVP.
+The runnable example covers pose sensitivities, forward-dynamics state JVPs,
+and total-energy gradients:
+
+```bash
+python examples/differentiation/derivative_modes.py
+```
+
+Use `--custom-derivatives` to exercise the optional rules. For the large PCS
+state-JVP workload, select CPU with `JAX_PLATFORMS=cpu`. The recommendations
+above apply separately to each query.
 
 The setting is read during tracing. Set it before the first call to a compiled
 function; changing it does not change an existing executable. For independent
@@ -168,6 +176,25 @@ formula is available. **Hybrid** combines analytical actions with autodiff.
 **AD** means the query uses autodiff. An AD entry still supports differentiation.
 Availability and the performance recommendation above are separate.
 
+### Kinematics
+
+Here `J(q, s)` is the geometric velocity Jacobian returned by `jacobian()`.
+For PCS, planar PCS, and GVS, `jacobian_inertialframe()` is the equivalent
+scalar query. Differentiating `J` computes its derivatives.
+
+| Model or system | Pose with respect to `q` | Pose with respect to `s` | `J` with respect to `q` | `J` with respect to `s` |
+|---|---|---|---|---|
+| PCS, ISupport | AD | Analytical | Analytical | Analytical |
+| PlanarPCS, PlanarHSA | AD | Analytical | Analytical | Analytical |
+| GVS, Helicoidal | AD | AD | Analytical | Analytical |
+| Pendulum | AD | AD | Analytical | AD |
+| ArticulatedSoftRobot, McKibbenActuatedUMArm | AD | AD | Analytical | AD |
+
+Mixed `q`/`s` directions and requests involving model parameters use joint AD.
+These entries describe scalar backbone queries. Specialized batched methods can
+use AD instead. Floating-base derivatives use AD. Explicit analytical
+arc-length helpers remain available for GVS.
+
 ### Dynamics
 
 | Model or system | Forward dynamics: state | Inverse dynamics: state | Dynamics terms `(M, Cqd, G)`: state | Inverse dynamics: acceleration |
@@ -189,25 +216,6 @@ PCS forward dynamics combines control and external-force directions through the
 inertia solve. Model-parameter directions use AD of the terms and forces, followed
 by the implicit acceleration derivative. Other systems use AD for those queries.
 There is no analytical-only mode that forces every dependency onto a closed form.
-
-### Kinematics
-
-Here `J(q, s)` is the geometric velocity Jacobian returned by `jacobian()`.
-For PCS, planar PCS, and GVS, `jacobian_inertialframe()` is the equivalent
-scalar query. Differentiating `J` computes its derivatives.
-
-| Model or system | Pose with respect to `q` | Pose with respect to `s` | `J` with respect to `q` | `J` with respect to `s` |
-|---|---|---|---|---|
-| PCS, ISupport | AD | Analytical | Analytical | Analytical |
-| PlanarPCS, PlanarHSA | AD | Analytical | Analytical | Analytical |
-| GVS, Helicoidal | AD | AD | Analytical | Analytical |
-| Pendulum | AD | AD | Analytical | AD |
-| ArticulatedSoftRobot, McKibbenActuatedUMArm | AD | AD | Analytical | AD |
-
-Mixed `q`/`s` directions and requests involving model parameters use joint AD.
-These entries describe scalar backbone queries. Specialized batched methods can
-use AD instead. Floating-base derivatives use AD. Explicit analytical
-arc-length helpers remain available for GVS.
 
 ### Energy
 
@@ -243,15 +251,6 @@ J, dJ = jax.jvp(lambda position: robot.jacobian(position, s), (q,), (dq,))
 
 ```
 
-## Energy examples
-
-```python
-# Gradients of scalar energies.
-gravity_gradient = jax.grad(robot.gravitational_energy)(q)
-elastic_gradient = jax.grad(robot.elastic_energy)(q)
-dE_dq, dE_dv = jax.grad(robot.total_energy, argnums=(0, 1))(q, v)
-```
-
 ## Dynamics and inverse dynamics
 
 The dynamics terms are `M`, the convective force `Cqd`, and gravity `G`.
@@ -271,6 +270,15 @@ Dq, Dv, Da = jax.jacfwd(robot.inverse_dynamics, argnums=(0, 1, 2))(
 It includes elastic and damping effort. Subtract external applied effort before
 solving for actuator controls. For inertial effort alone, differentiate
 `robot.inverse_dynamics(q, v, acceleration) - robot.passive_force(q, v)`.
+
+## Energy examples
+
+```python
+# Gradients of scalar energies.
+gravity_gradient = jax.grad(robot.gravitational_energy)(q)
+elastic_gradient = jax.grad(robot.elastic_energy)(q)
+dE_dq, dE_dv = jax.grad(robot.total_energy, argnums=(0, 1))(q, v)
+```
 
 ## Differentiating parameter updates
 

@@ -77,8 +77,8 @@ class FeedforwardCompensationTracker(PIDController):
 
         Args:
             robot: The soft robot system to be controlled.
-                Must have `actuation_matrix(q)`, `dynamics_terms(q, qd)`,
-                `elastic_force(q)`, and `damping_matrix(q)` methods.
+                Must have `actuation_matrix(q)` and
+                `inverse_dynamics(q, qd, qdd)` methods.
             reference_trajectory: The desired trajectory to track.
                 Must provide x_des_fn (desired configuration), xd_des_fn
                 (desired velocity), and xdd_des_fn (desired acceleration)
@@ -139,15 +139,7 @@ class FeedforwardCompensationTracker(PIDController):
         qd_des = self.reference_trajectory.xd_des_fn(t)
         qdd_des = self.reference_trajectory.xdd_des_fn(t)
 
-        # Compute the coupled dynamics terms at the desired trajectory. The
-        # returned Coriolis term is already contracted with qd_des.
-        B_des, Cqd_des, G_des = robot.dynamics_terms(q_des, qd_des)
-        tau_el_des = robot.elastic_force(q_des)
-        D_des = robot.damping_matrix(q_des)
-
-        # Compute inverse dynamics at desired trajectory
-        # tau = B @ qdd + C @ qd + G + tau_el + D @ qd
-        tau_model = B_des @ qdd_des + Cqd_des + G_des + tau_el_des + D_des @ qd_des
+        tau_model = robot.inverse_dynamics(q_des, qd_des, qdd_des)
 
         # Get the actuation matrix at current configuration
         A = robot.actuation_matrix(q)

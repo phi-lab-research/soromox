@@ -40,19 +40,37 @@ _STRICT_SINGULARITIES = False
 
 
 def custom_jvp_enabled() -> bool:
-    """Return whether optional analytical rules are enabled (default: False)."""
+    """Read the optional analytical derivative mode.
+
+    Returns:
+        Whether analytical rules are enabled. The package default is ``False``.
+    """
     return _CUSTOM_JVP_ENABLED
 
 
 def set_custom_jvp_enabled(enabled: bool) -> None:
-    """Opt into optional analytical rules before tracing; False selects autodiff."""
+    """Select optional analytical rules before tracing application functions.
+
+    Args:
+        enabled: ``True`` enables optional rules; ``False`` selects autodiff.
+
+    Returns:
+        None. Updates the process-wide setting for future traces.
+    """
     global _CUSTOM_JVP_ENABLED
     _CUSTOM_JVP_ENABLED = bool(enabled)
 
 
 @contextmanager
 def custom_jvp_mode(enabled: bool) -> Iterator[None]:
-    """Temporarily enable or disable custom JVP rules in public APIs."""
+    """Temporarily select optional analytical rules in system methods.
+
+    Args:
+        enabled: Whether to enable optional rules for traces inside the context.
+
+    Yields:
+        None. Restores the previous setting on exit, including exceptions.
+    """
     previous = custom_jvp_enabled()
     set_custom_jvp_enabled(enabled)
     try:

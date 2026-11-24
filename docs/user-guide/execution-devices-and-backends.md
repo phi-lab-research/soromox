@@ -288,9 +288,8 @@ including nested scalar `vmap` expressions for Cartesian batches.
 JAX transformations use ordinary autodiff through the JAX implementation by
 default, even when the model uses Warp for ordinary primal GPU calls. Explicitly
 enabling custom derivatives selects supported analytical rules at the same JAX
-boundary. This applies to accelerated kinematics and Jacobians as well as
-`model.dynamics_terms` and complete
-`forward_dynamics` evaluations.
+boundary. This applies to kinematics and geometric Jacobians, dynamics terms
+and forward/inverse dynamics, and scalar energy queries.
 
 See [Differentiation](differentiation.md) for mode selection, derivative
 representations, examples, and analytical support by model.

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -123,16 +121,12 @@ class _KinematicsTransformProbe(eqx.Module):
 
         return self.offset + jnp.array([s + q[0], q[1], q[2]])
 
-    def _forward_kinematics_jvp(
-        self,
-        q: Array,
-        s: Array,
-        qd: Array | None,
-        sd: Array | None,
-        *,
-        model_tangent: Any = None,
-    ) -> tuple[Array, Array]:
+    def _analytical_forward_kinematics_jvp(
+        self, primals: tuple, tangents: tuple
+    ) -> tuple[Array, Array] | None:
         """Differentiate the probe's model and state inputs."""
+        _, q, s = primals
+        model_tangent, qd, sd = tangents
 
         qd = jnp.zeros_like(q) if qd is None else qd
         sd = jnp.zeros_like(s) if sd is None else sd
@@ -293,14 +287,16 @@ def test_pose_derivative_mode_across_execution_boundaries(
     q = jnp.array([0.1, -0.2, 0.3])
     samples = jnp.array([0.2, 0.4])
     calls = []
-    original = _KinematicsTransformProbe._forward_kinematics_jvp
+    original = _KinematicsTransformProbe._analytical_forward_kinematics_jvp
 
     def observed(self, *args, **kwargs):
         assert enabled, "disabled analytical pose hook was called"
         calls.append(True)
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(_KinematicsTransformProbe, "_forward_kinematics_jvp", observed)
+    monkeypatch.setattr(
+        _KinematicsTransformProbe, "_analytical_forward_kinematics_jvp", observed
+    )
     monkeypatch.setattr(
         _KinematicsTransformProbe,
         "_absolute_inertial_jacobian",
@@ -358,15 +354,17 @@ def test_scalar_inertial_jacobian_mode_across_execution_boundaries(
     def primal(self, q, s):
         return jnp.diag(q**2 + s + self.offset)
 
-    def hook(self, q, s, dq, ds, *, model_tangent):
+    def hook(self, primals, tangents):
         assert enabled
         calls.append(True)
-        return eqx.filter_jvp(primal, (self, q, s), (model_tangent, dq, ds))
+        return eqx.filter_jvp(primal, primals, tangents)
 
     monkeypatch.setattr(
         _KinematicsTransformProbe, "_absolute_inertial_jacobian", primal, raising=False
     )
-    monkeypatch.setattr(_KinematicsTransformProbe, "_jacobian_jvp", hook, raising=False)
+    monkeypatch.setattr(
+        _KinematicsTransformProbe, "_analytical_jacobian_jvp", hook, raising=False
+    )
 
     def forbidden_primal(*args):
         raise AssertionError("derivative staged an accelerated primal")
@@ -417,8 +415,8 @@ def test_dynamics_boundaries_own_derivative_mode(
     """Model hooks need no copy of the process-wide mode policy."""
     from soromox.execution.transforms import (
         _assemble_forward_dynamics,
+        evaluate_dynamics_terms,
         evaluate_inverse_dynamics,
-        evaluate_jax_dynamics_terms,
     )
 
     model = _TransformProbe(scale=jnp.array(2.0))
@@ -463,7 +461,7 @@ def test_dynamics_boundaries_own_derivative_mode(
         def raw(model, q, v):
             return model._assemble_dynamics_terms(q, v)
 
-        evaluator = evaluate_jax_dynamics_terms
+        evaluator = evaluate_dynamics_terms
         if operation == "accelerated_terms":
 
             def forbidden_executor(*args):

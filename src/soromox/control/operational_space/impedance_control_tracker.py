@@ -291,8 +291,6 @@ class ImpedanceControlTracker(OperationalSpaceBaseController):
 
         # Configuration-space forces
         robot = getattr(osd, "fixed_base_robot", osd.robot)
-        tau_el = robot.elastic_force(q)  # Elastic force
-        D_config = robot.damping_matrix(q)  # Damping matrix
         G = robot.gravitational_force(q)  # Gravitational force
 
         # ===== Compute control torque components =====
@@ -301,7 +299,7 @@ class ImpedanceControlTracker(OperationalSpaceBaseController):
         # The elastic and damping forces in configuration space that couple to the task
         # are projected using J_bar^T: f_x = J_bar^T @ tau_config
         # To cancel them, we apply: tau_cancel = J^T @ J_bar^T @ (tau_el + D @ qd)
-        tau_task_forces = tau_el + D_config @ qd
+        tau_task_forces = robot.passive_force(q, qd)
         tau_cancel_task = J.T @ (J_bar.T @ tau_task_forces)
 
         # 2. Cancel gravity

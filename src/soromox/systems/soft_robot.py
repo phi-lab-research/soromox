@@ -25,8 +25,7 @@ from soromox.execution.transforms import (
     evaluate_jacobian,
     evaluate_pose,
 )
-from soromox.systems import _energy
-from soromox.systems._dynamics import has_tangent
+from soromox.systems import _energy, _kinematics
 from soromox.systems.dynamical_system import DynamicalSystem
 from soromox.systems.params import (
     validate_planar_base_pose,
@@ -1065,67 +1064,31 @@ class SoftRobot(DynamicalSystem):
             f"{type(self).__name__} must implement _forward_kinematics."
         )
 
-    def _forward_kinematics_jvp(
-        self,
-        q: Array,
-        s: Array,
-        qd: Array | None,
-        sd: Array | None,
-        *,
-        model_tangent: Any = None,
-    ) -> tuple[Array, Array]:
-        """
-        Evaluate the complete FK custom JVP with the narrowest needed hooks.
+    def _analytical_forward_kinematics_jvp(self, primals, tangents):
+        """Select an optional pose derivative action.
 
-        The arc-length-only tangent uses the model-selected action. The default
-        uses ``forward_kinematics_and_arc_length_derivative`` for a compact
-        analytical ``d pose / ds``; GVS selects scalar-primal AD instead. Configuration-only and mixed ``q``/``s`` tangents
-        intentionally use JAX autodiff through ``_forward_kinematics``. Earlier
-        specialized FK velocity paths duplicated substantial kinematics code
-        and did not show enough benchmark benefit to justify the maintenance
-        cost. ``model_tangent`` is optional for direct internal calls. Equinox
-        custom-JVP rules supply a model-shaped filtered tangent whose inactive
-        dynamic leaves are ``None``. Requests involving model parameters use
-        one joint AD pass for all active inputs. The differentiated
-        ``_absolute_forward_kinematics`` hook is a protected primal path and
-        does not call the public custom-JVP wrapper recursively. Its
-        configuration derivative returns a tangent in the stored pose
-        representation; the analytical Jacobian instead returns an inertial
-        velocity, and the previous conversion path duplicated pose-specific
-        logic without a measured benefit.
-        """
-        if has_tangent(model_tangent):
-            return eqx.filter_jvp(
-                lambda model, q, s: model._absolute_forward_kinematics(q, s),
-                (self, q, s),
-                (model_tangent, qd, sd),
-            )
-        forward_kinematics = self._absolute_forward_kinematics
-        if qd is not None:
-            if sd is None:
-                pose, pose_tangent = jvp(
-                    lambda q_: forward_kinematics(q_, s), (q,), (qd,)
-                )
-            else:
-                pose, pose_tangent = jvp(
-                    lambda q_, s_: forward_kinematics(q_, s_),
-                    (q, s),
-                    (qd, sd),
-                )
-        elif sd is None:
-            pose = forward_kinematics(q, s)
-            pose_tangent = jnp.zeros_like(pose)
-        elif self.floating_base:
-            pose, pose_tangent = jvp(lambda s_: forward_kinematics(q, s_), (s,), (sd,))
-        else:
-            pose, pose_tangent = self._forward_kinematics_arc_length_jvp(q, s, sd)
+        Args:
+            primals: Model, configuration, and scalar backbone coordinate.
+            tangents: Corresponding directions; inactive leaves are ``None``.
 
-        return pose, pose_tangent
+        Returns:
+            Pose and directional derivative, or ``None`` to select autodiff.
+        """
+        return _kinematics.pose_jvp(primals, tangents)
 
     def _forward_kinematics_arc_length_jvp(
         self, q: Array, s: Array, sd: Array
     ) -> tuple[Array, Array]:
-        """Select the scalar arc-length action used by ordinary JAX transforms."""
+        """Apply the selected arc-length derivative of the pose.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            s: Scalar backbone coordinate.
+            sd: Scalar backbone direction.
+
+        Returns:
+            Pose and its directional derivative in the stored pose representation.
+        """
         pose, pose_s = self.forward_kinematics_and_arc_length_derivative(q, s)
         return pose, pose_s * sd
 
@@ -1282,45 +1245,17 @@ class SoftRobot(DynamicalSystem):
 
         return self._spatial_pose_jacobian(pose, dpose_dq)
 
-    def _jacobian_jvp(
-        self,
-        q: Array,
-        s: Array,
-        qd: Array | None,
-        sd: Array | None,
-        *,
-        model_tangent: Any = None,
-    ) -> tuple[Array, Array]:
-        """
-        Evaluate the Jacobian custom-JVP tangent with specialized hooks.
+    def _analytical_jacobian_jvp(self, primals, tangents):
+        """Select an optional geometric-Jacobian derivative action.
 
-        The mixed ``q``/``s`` tangent intentionally falls back to JAX autodiff
-        through ``_jacobian``. Benchmarks showed that maintaining a
-        separate fused custom-JVP path for this case does not pay for its added
-        complexity.
-        """
-        if has_tangent(model_tangent):
-            return eqx.filter_jvp(
-                lambda model, q, s: model._jacobian(q, s),
-                (self, q, s),
-                (model_tangent, qd, sd),
-            )
-        if qd is None and sd is None:
-            J = self._jacobian(q, s)
-            J_tangent = jnp.zeros_like(J)
-        elif qd is None:
-            J, Js = self.jacobian_and_arc_length_derivative(q, s)
-            J_tangent = Js * sd
-        elif sd is None:
-            J, J_tangent = self.jacobian_and_time_derivative(q, qd, s)
-        else:
-            J, J_tangent = jvp(
-                lambda q_, s_: self._jacobian(q_, s_),
-                (q, s),
-                (qd, sd),
-            )
+        Args:
+            primals: Model, configuration, and scalar backbone coordinate.
+            tangents: Corresponding directions; inactive leaves are ``None``.
 
-        return J, J_tangent
+        Returns:
+            Jacobian and directional derivative, or ``None`` to select autodiff.
+        """
+        return _kinematics.jacobian_jvp(primals, tangents)
 
     def jacobian_tips(self, q: Array) -> Array:
         """
@@ -2730,55 +2665,74 @@ class SoftRobot(DynamicalSystem):
         return evaluate_energy(self, q, qd, "kinetic")
 
     def _analytical_energy_jvp(self, primals, tangents):
-        """Supply energy identities to the shared derivative boundary."""
+        """Supply energy identities to the shared derivative boundary.
+
+        Args:
+            primals: Model, configuration, optional velocity, and energy kind.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            Energy and its direction, or ``None`` to select autodiff.
+        """
         return _energy.energy_jvp(primals, tangents)
 
     def _kinetic_energy(self, q: Array, qd: Array) -> Array:
-        """
-        Protected primal kinetic-energy hook for custom autodiff wrappers.
+        """Evaluate kinetic energy from generalized velocity and inertia.
 
-        Default implementation: T = 0.5 * qd^T * M(q) * qd.
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+
+        Returns:
+            Scalar kinetic energy ``0.5 * qd @ inertia_matrix(q) @ qd``.
         """
-        M = self._kinetic_energy_inertia_matrix(q, qd)
+        M = self.inertia_matrix(q)
         T = 0.5 * qd @ M @ qd
         return T
 
     def _kinetic_energy_q_jvp_tangent(
         self, q: Array, qd: Array, q_tangent: Array
     ) -> Array:
-        """
-        Compute the kinetic-energy contribution from a configuration tangent.
+        """Compute the kinetic-energy configuration direction.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            q_tangent: Configuration direction with the shape of ``q``.
+
+        Returns:
+            Scalar directional derivative of kinetic energy.
         """
         coriolis_cross = self._kinetic_energy_coriolis_cross_force(q, qd, q_tangent)
         return qd @ coriolis_cross
 
     def _kinetic_energy_qd_jvp_tangent(self, q: Array, qd: Array, qdd: Array) -> Array:
+        """Compute the kinetic-energy velocity direction.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qdd: Velocity direction with the shape of ``qd``.
+
+        Returns:
+            Scalar directional derivative of kinetic energy.
         """
-        Compute the kinetic-energy contribution from a velocity tangent.
-        """
-        M = self._kinetic_energy_inertia_matrix(q, qd)
+        M = self.inertia_matrix(q)
         return qd @ M @ qdd
-
-    def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
-        """
-        Return the shared JAX inertia source for kinetic energy and its JVP.
-
-        Models can override this hook with an efficient protected JAX assembly.
-        It must agree with ``inertia_matrix`` and avoid execution dispatch.
-        Identical primal/tangent requests can then share the compiled assembly.
-        """
-        return self.inertia_matrix(q)
 
     def _kinetic_energy_coriolis_cross_force(
         self, q: Array, qd: Array, qd_tangent: Array
     ) -> Array:
-        """
-        Return ``C(q, qd_tangent) @ qd`` for the configuration tangent.
+        """Compute ``C(q, qd_tangent) @ qd`` from the convective-force derivative.
 
-        The cross term is obtained by a velocity-direction JVP through
-        protected ``_assemble_dynamics_terms`` equations:
-        ``d(C(v) @ v)[qd, qd_tangent] / 2 = C(q, qd_tangent) @ qd``
-        for the standard Christoffel/energy-consistent Coriolis convention.
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qd_tangent: Velocity direction, shape ``(num_velocities,)``.
+
+        Returns:
+            Half the velocity JVP of ``C(q, qd) @ qd``, using the energy-consistent
+            Christoffel convention.
         """
         _, coriolis_cross = jvp(
             lambda velocity: self._assemble_dynamics_terms(q, velocity)[1],
@@ -2788,7 +2742,15 @@ class SoftRobot(DynamicalSystem):
         return 0.5 * coriolis_cross
 
     def _gravitational_energy_q_jvp_tangent(self, q: Array, dq: Array) -> Array:
-        """Supply the gravity-energy action independently of kinetic/elastic rules."""
+        """Apply the gravitational-energy configuration derivative.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            dq: Configuration direction with the shape of ``q``.
+
+        Returns:
+            Scalar gravitational-energy direction.
+        """
         return self.gravitational_force(q) @ dq
 
     def gravitational_energy(self, q: Array) -> Array:
@@ -2892,20 +2854,66 @@ class SoftRobot(DynamicalSystem):
     # -----------------------------------------
 
     def dynamics_terms(self, q: Array, qd: Array) -> tuple[Array, Array, Array]:
-        """
-        Return forward-dynamics terms ``(M, Cqd, G)``.
+        """Return inertia, convective force, and gravitational effort.
 
-        ``Cqd`` is the convective force vector ``C(q, qd) @ qd``. The default
-        implementation is intentionally unfused and calls the public matrix and
-        force APIs separately. Overrides must keep ``M`` and ``Cqd``
-        energy-consistent with ``inertia_matrix`` and ``coriolis_matrix``.
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+
+        Returns:
+            Tuple ``(M, Cqd, G)`` with shapes ``(nv, nv)``, ``(nv,)``, and
+            ``(nv,)``. The terms share the model's energy-consistent inertia.
         """
         return self._assemble_dynamics_terms(q, qd)
+
+    def _analytical_dynamics_terms_jvp(self, primals, tangents):
+        """Select an optional dynamics-term action.
+
+        Args:
+            primals: Tuple containing the model, configuration, and velocity.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            ``None`` for autodiff. Overrides may return term values and directional derivatives.
+        """
+        return None
+
+    def _analytical_forward_dynamics_jvp(self, primals, tangents):
+        """Select an optional forward-dynamics action.
+
+        Args:
+            primals: Tuple containing the model, time, state, and actuation arguments.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            ``None`` for autodiff. Overrides may return state derivative and its directional derivative.
+        """
+        return None
+
+    def _analytical_inverse_dynamics_jvp(self, primals, tangents):
+        """Select an optional inverse-dynamics action.
+
+        Args:
+            primals: Tuple containing the model, configuration, velocity, and acceleration.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            ``None`` for autodiff. Overrides may return required effort and its directional derivative.
+        """
+        return None
 
     def _assemble_dynamics_terms(
         self, q: Array, qd: Array
     ) -> tuple[Array, Array, Array]:
-        """Assemble the JAX inertia, convective force, and gravity terms."""
+        """Assemble the differentiable dynamics equations.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+
+        Returns:
+            Tuple ``(M, Cqd, G)`` for the current fixed or floating configuration.
+        """
         if self.floating_base:
             return self._assemble_floating_dynamics_terms(q, qd)
         M = self.inertia_matrix(q)
@@ -2988,16 +2996,28 @@ class SoftRobot(DynamicalSystem):
         return jnp.concatenate([qdot, qdd, auxiliary_dot])
 
     def passive_force(self, q: Array, qd: Array) -> Array:
-        """Return total elastic and damping effort, including passive elements.
+        """Return elastic and damping effort, including installed passive elements.
 
-        This force appears on the required-effort side of the equations:
-        ``M @ qdd + Cqd + G + passive_force(q, qd) = applied effort``.
-        The output has shape ``(num_velocities,)``.
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+
+        Returns:
+            Required passive effort, shape ``(num_velocities,)``, in
+            ``M @ qdd + Cqd + G + passive_force = applied effort``.
         """
         return self.elastic_force(q) + self.damping_matrix(q) @ qd
 
     def _actuation_inputs(self, args: tuple | None, dtype) -> tuple[Array, Array]:
-        """Normalize optional controls and external generalized effort."""
+        """Normalize optional controls and external generalized effort.
+
+        Args:
+            args: ``None``, ``(u,)``, or ``(u, external)``; each input may be ``None``.
+            dtype: Array dtype for omitted inputs.
+
+        Returns:
+            Control and external-effort arrays, with omitted inputs replaced by zeros.
+        """
         if args is not None and len(args) not in (1, 2):
             raise ValueError("actuation_args must be a tuple of length 1 or 2.")
         u = None if args is None else args[0]
@@ -3010,13 +3030,32 @@ class SoftRobot(DynamicalSystem):
         )
 
     def _applied_force(self, q: Array, qd: Array, u: Array, external: Array) -> Array:
-        """Net applied generalized force for the JAX dynamics assembly."""
+        """Assemble the net applied generalized force.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            u: Actuator controls, shape ``(num_actuators,)``.
+            external: External generalized effort, shape ``(num_velocities,)``.
+
+        Returns:
+            Actuation plus external effort minus passive effort, shape ``(nv,)``.
+        """
         return self._actuation_force(q, u, qd) + external - self.passive_force(q, qd)
 
     def _forward_dynamics(
         self, t: Array, y: Array, actuation_args: tuple | None = None
     ) -> Array:
-        """Assemble the JAX equations for a single forward-dynamics state."""
+        """Assemble the differentiable forward-dynamics equations.
+
+        Args:
+            t: Current time, accepted for integration compatibility.
+            y: Packed configuration, velocity, and auxiliary state.
+            actuation_args: Optional ``(u,)`` or ``(u, external)`` tuple.
+
+        Returns:
+            Packed state derivative with zero auxiliary-state derivatives.
+        """
         del t
         q, v, auxiliary = self.split_state(y)
         u, external = self._actuation_inputs(actuation_args, y.dtype)
@@ -3031,20 +3070,29 @@ class SoftRobot(DynamicalSystem):
     def inverse_dynamics(self, q: Array, qd: Array, qdd: Array) -> Array:
         """Return generalized effort required for the requested acceleration.
 
-        Computes ``M @ qdd + Cqd + G + passive_force(q, qd)``, including elastic
-        and damping effort. External applied effort is excluded. The result is
-        a generalized force of shape ``(num_velocities,)``; actuator control
-        allocation is a separate operation. JAX transformations support state,
-        acceleration, and model parameter derivatives.
-
         Args:
-            q: Configuration of shape ``(num_coordinates,)``.
-            qd: Velocity of shape ``(num_velocities,)``.
-            qdd: Acceleration of shape ``(num_velocities,)``.
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qdd: Generalized acceleration, shape ``(num_velocities,)``.
+
+        Returns:
+            Effort ``M @ qdd + Cqd + G + passive_force(q, qd)``, shape
+            ``(num_velocities,)``. Subtract external applied effort before allocating
+            actuator controls. State, acceleration, and model parameters are differentiable.
         """
         return evaluate_inverse_dynamics(self, q, qd, qdd)
 
     def _inverse_dynamics(self, q: Array, qd: Array, qdd: Array) -> Array:
-        """Assemble the JAX equations for required generalized effort."""
+        """Assemble the effort required for the requested acceleration.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+            qdd: Generalized acceleration, shape ``(num_velocities,)``.
+
+        Returns:
+            Generalized effort ``M @ qdd + Cqd + G + passive_force(q, qd)``,
+            shape ``(num_velocities,)``.
+        """
         mass, convective, gravity = self._assemble_dynamics_terms(q, qd)
         return mass @ qdd + convective + gravity + self.passive_force(q, qd)

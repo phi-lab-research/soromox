@@ -176,7 +176,15 @@ def _left_jacobian_coefficients_with_x_derivatives(
 def _left_jacobian_coefficients_and_x_derivatives(
     angle_sq: Array, eps: float | Array
 ) -> tuple[tuple[Array, ...], tuple[Array, ...]]:
-    """Return reduced left-Jacobian coefficients and first derivatives."""
+    """Evaluate reduced left-Jacobian coefficients and their first derivatives.
+
+    Args:
+        angle_sq: Squared rotational magnitude.
+        eps: Positive tolerance for safe divisions in the general branch.
+
+    Returns:
+        Coefficient tuple and its derivatives with respect to squared angle.
+    """
     coefficients, derivatives, _ = _left_jacobian_coefficients_with_x_derivatives(
         angle_sq,
         eps,

@@ -7,12 +7,29 @@ active directions. Missing actions use JAX differentiation of the assembly.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax import Array
 from jax.scipy.linalg import cho_solve, lu_factor, lu_solve
+
+if TYPE_CHECKING:
+    from soromox.systems.soft_robot import SoftRobot
+
+Terms = tuple[Array, Array, Array]
+TermsPrimals = tuple["SoftRobot", Array, Array]
+TermsTangents = tuple[Any, Array | None, Array | None]
+ForwardPrimals = tuple["SoftRobot", Array | float, Array, tuple | None]
+ForwardTangents = tuple[Any, Array | None, Array | None, tuple | None]
+InversePrimals = tuple["SoftRobot", Array, Array, Array]
+InverseTangents = tuple[Any, Array | None, Array | None, Array | None]
+TermsAction = Callable[[TermsPrimals, TermsTangents], tuple[Terms, Terms]]
+StateTermsAction = Callable[[Array, Array, Array, Array], tuple[Array, ...]]
+InertialStateAction = Callable[[Array, Array, Array, Array, Array], Array]
+ForceStateAction = Callable[[Array, Array, Array, Array, Array], Array]
 
 
 class InertiaFactors(NamedTuple):
@@ -23,11 +40,15 @@ class InertiaFactors(NamedTuple):
 
 
 def factor_inertia(mass: jax.Array) -> InertiaFactors:
-    """Factor inertia once for reuse by primal and directional solves.
+    """Factor inertia for reuse by primal and directional solves.
 
-    Match ``SoftRobot._solve_inertia``: CPU uses Cholesky of the symmetrized
-    inertia; accelerator backends use LU. Dispatch follows the compilation
-    target through ``lax.platform_dependent``.
+    CPU uses Cholesky of the symmetrized matrix; accelerators use LU.
+
+    Args:
+        mass: Positive-definite inertia, shape ``(nv, nv)``.
+
+    Returns:
+        Factor storage and pivot indices for the compilation target.
     """
 
     def cholesky(matrix):
@@ -43,7 +64,15 @@ def factor_inertia(mass: jax.Array) -> InertiaFactors:
 
 
 def solve_factored(factors: InertiaFactors, rhs: jax.Array) -> jax.Array:
-    """Apply saved factors to a vector or several right-hand sides."""
+    """Solve with previously computed inertia factors.
+
+    Args:
+        factors: Output of :func:`factor_inertia`.
+        rhs: Right-hand side, shape ``(nv,)`` or ``(nv, k)``.
+
+    Returns:
+        Solution with the same shape as ``rhs``.
+    """
     return jax.lax.platform_dependent(
         factors,
         rhs,
@@ -52,17 +81,41 @@ def solve_factored(factors: InertiaFactors, rhs: jax.Array) -> jax.Array:
     )
 
 
-def has_tangent(tree) -> bool:
-    """Check symbolic activity, never the numerical values of a tangent."""
+def has_tangent(tree: Any) -> bool:
+    """Determine symbolic activity of a filtered tangent tree.
+
+    Args:
+        tree: Tangent PyTree with ``None`` for inactive leaves.
+
+    Returns:
+        Whether any leaf is active, independent of its numerical value.
+    """
     return any(x is not None for x in jax.tree.leaves(tree))
 
 
-def instantiate(tangent, primal):
+def instantiate(tangent: Array | None, primal: Array) -> Array:
+    """Materialize an inactive array direction as zero.
+
+    Args:
+        tangent: Array direction or ``None`` for an inactive input.
+        primal: Array supplying the shape and dtype.
+
+    Returns:
+        The supplied direction, or a zero array matching ``primal``.
+    """
     return jnp.zeros_like(primal) if tangent is None else tangent
 
 
-def ad_terms_jvp(primals, tangents):
-    """One AD assembly for the union of active state and parameter leaves."""
+def ad_terms_jvp(primals: TermsPrimals, tangents: TermsTangents) -> tuple[Terms, Terms]:
+    """Evaluate one joint autodiff assembly for active state and parameter inputs.
+
+    Args:
+        primals: Model, configuration, and generalized velocity.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Primal ``(M, Cqd, G)`` and their array-valued directional derivatives.
+    """
     values, directions = eqx.filter_jvp(
         lambda model, position, velocity: model._assemble_dynamics_terms(
             position, velocity
@@ -76,21 +129,25 @@ def ad_terms_jvp(primals, tangents):
 
 
 def forward_dynamics_jvp(
-    primals,
-    tangents,
+    primals: ForwardPrimals,
+    tangents: ForwardTangents,
     *,
-    terms_action=ad_terms_jvp,
-    inertial_state_action=None,
-    force_state_action=None,
-):
-    """Differentiate ``M a = applied - c - g`` with reusable factors.
+    terms_action: TermsAction = ad_terms_jvp,
+    inertial_state_action: InertialStateAction | None = None,
+    force_state_action: ForceStateAction | None = None,
+) -> tuple[Array, Array]:
+    """Differentiate ``M a = applied - c - g`` with one reusable factorization.
 
-    ``terms_action`` returns values and directional derivatives of ``(M,c,g)``.
-    A contracted ``inertial_state_action(q,v,a,dq,dv)`` may replace those
-    derivatives for state-only requests. ``force_state_action(q,v,u,dq,dv)``
-    supplies the applied-force state derivative. Both optional actions are
-    bound to the primal model; parameter directions use one joint AD assembly.
-    Activity is determined from symbolic ``None`` tangents at tracing time.
+    Args:
+        primals: Model, time, packed state, and optional actuation arguments.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+        terms_action: Bound composition returning primal and directional ``(M, Cqd, G)``.
+        inertial_state_action: Optional ``(q, v, a, dq, dv)`` action for contracted inertial effort.
+        force_state_action: Optional ``(q, v, u, dq, dv)`` action for net applied force.
+
+    Returns:
+        Primal packed state derivative and its direction. Parameter inputs use joint
+        autodiff; symbolically inactive inputs omit their contributions.
     """
     robot, _, y, args = primals
     drobot, _, dy, dargs = tangents
@@ -150,16 +207,23 @@ def forward_dynamics_jvp(
 
 
 def inverse_dynamics_jvp(
-    primals,
-    tangents,
+    primals: InversePrimals,
+    tangents: InverseTangents,
     *,
-    terms_action=ad_terms_jvp,
-    inertial_state_action=None,
-):
-    """Compose required-effort derivatives from model terms and passive forces.
+    terms_action: TermsAction = ad_terms_jvp,
+    inertial_state_action: InertialStateAction | None = None,
+) -> tuple[Array, Array]:
+    """Compose required-effort derivatives from inertial and passive forces.
 
-    The optional actions have the same contracts as in ``forward_dynamics_jvp``.
-    Acceleration-only requests reuse the primal inertia directly.
+    Args:
+        primals: Model, configuration, velocity, and acceleration.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+        terms_action: Composition returning primal and directional ``(M, Cqd, G)``.
+        inertial_state_action: Optional ``(q, v, a, dq, dv)`` action for contracted inertial effort.
+
+    Returns:
+        Required effort and its direction, each of shape ``(num_velocities,)``.
+        Acceleration-only requests reuse the primal inertia.
     """
     robot, q, v, acceleration = primals
     drobot, dq, dv, da = tangents
@@ -191,3 +255,57 @@ def inverse_dynamics_jvp(
     if da is not None:
         direction = direction + mass @ da
     return mass @ acceleration + convective + gravity + passive, direction
+
+
+def terms_jvp(
+    primals: TermsPrimals,
+    tangents: TermsTangents,
+    *,
+    state_action: StateTermsAction | None = None,
+) -> tuple[Terms, Terms]:
+    """Compose optional state actions with joint parameter differentiation.
+
+    Args:
+        primals: Model, configuration, and generalized velocity.
+        tangents: Corresponding directions, with ``None`` for inactive leaves.
+        state_action: Optional bound recurrence returning ``M, c, g, dM, dc, dg``
+            for ``q, v, dq, dv``. A missing action selects autodiff.
+
+    Returns:
+        Primal dynamics terms and their directional derivatives. Parameter and
+        velocity-only requests use one joint autodiff assembly.
+    """
+    robot, q, v = primals
+    drobot, dq, dv = tangents
+    if has_tangent(drobot) or state_action is None or (dq is None and dv is not None):
+        return ad_terms_jvp(primals, tangents)
+    if dq is None and dv is None:
+        values = robot._assemble_dynamics_terms(q, v)
+        return values, jax.tree.map(jnp.zeros_like, values)
+    values = state_action(q, v, instantiate(dq, q), instantiate(dv, v))
+    return values[:3], values[3:]
+
+
+def inertial_state_action(
+    pushforward: InertialStateAction,
+    q: Array,
+    v: Array,
+    acceleration: Array,
+    dq: Array,
+    dv: Array,
+) -> Array:
+    """Apply a model's matrix-direction recurrence to one state direction.
+
+    Args:
+        pushforward: Bound recurrence accepting configuration/velocity direction
+            matrices and returning inertial-force direction columns.
+        q: Configuration, shape ``(nq,)``.
+        v: Velocity, shape ``(nv,)``.
+        acceleration: Fixed acceleration, shape ``(nv,)``.
+        dq: Configuration direction, shape ``(nq,)``.
+        dv: Velocity direction, shape ``(nv,)``.
+
+    Returns:
+        Inertial-force direction, shape ``(nv,)``.
+    """
+    return pushforward(q, v, acceleration, dq[:, None], dv[:, None])[:, 0]

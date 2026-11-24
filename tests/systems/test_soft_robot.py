@@ -293,7 +293,7 @@ def test_disabled_pose_derivatives_skip_analytical_hooks(factory, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("disabled analytical pose rule was called")
 
-    monkeypatch.setattr(type(robot), "_forward_kinematics_jvp", forbidden)
+    monkeypatch.setattr(type(robot), "_analytical_forward_kinematics_jvp", forbidden)
     with custom_jvp_mode(False):
         actual = jax.jit(
             jax.jacfwd(lambda s: robot.forward_kinematics(q, s, backend="jax"))
@@ -443,7 +443,7 @@ def test_scalar_jacobian_aliases_share_derivative_routing(
     robot = factory(floating_base=False)
     q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
     s = jnp.array(0.05)
-    original = type(robot)._jacobian_jvp
+    original = type(robot)._analytical_jacobian_jvp
     calls = []
 
     def observed(self, *args, **kwargs):
@@ -451,7 +451,7 @@ def test_scalar_jacobian_aliases_share_derivative_routing(
         calls.append(True)
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(robot), "_jacobian_jvp", observed)
+    monkeypatch.setattr(type(robot), "_analytical_jacobian_jvp", observed)
     reference = None
     for method in (robot.jacobian, robot.jacobian_inertialframe):
         calls.clear()
@@ -504,4 +504,35 @@ def test_passive_force_override_is_shared_by_forward_and_inverse(factory, enable
     assert_allclose(actual, a, rtol=1e-6, atol=1e-8)
     assert_allclose(primal, a, rtol=1e-6, atol=1e-8)
     assert_allclose(direction, jnp.zeros_like(a), atol=1e-7)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("active", ["configuration", "velocity", "parameters"])
+def test_shared_terms_composition_accepts_non_pcs_actions(active):
+    robot = _planar_robot(floating_base=False)
+    q = jnp.array([0.02, 0.01, -0.03])
+    v = jnp.array([0.1, -0.2, 0.3])
+    dmodel = jax.tree.map(
+        lambda value: (
+            jnp.zeros_like(value)
+            if active == "parameters" and eqx.is_inexact_array(value)
+            else None
+        ),
+        robot,
+    )
+    dq = None if active == "velocity" else jnp.ones_like(q)
+    dv = jnp.ones_like(v)
+    calls = []
+
+    def state_action(q, v, dq, dv):
+        calls.append(True)
+        values, directions = jax.jvp(robot._assemble_dynamics_terms, (q, v), (dq, dv))
+        return (*values, *directions)
+
+    primals, tangents = (robot, q, v), (dmodel, dq, dv)
+    actual = _dynamics.terms_jvp(primals, tangents, state_action=state_action)
+    expected = _dynamics.ad_terms_jvp(primals, tangents)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-8, atol=1e-10)
+    assert bool(calls) is (active == "configuration")
     jax.clear_caches()

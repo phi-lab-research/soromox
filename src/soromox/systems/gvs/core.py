@@ -2674,7 +2674,16 @@ class GVS(SoftRobot):
     def _forward_kinematics_arc_length_jvp(
         self, q: Array, s: Array, sd: Array
     ) -> tuple[Array, Array]:
-        """Use AD of the scalar pose recurrence for transformed arc-length queries."""
+        """Differentiate the scalar pose recurrence along the backbone.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            s: Scalar backbone coordinate.
+            sd: Scalar backbone direction.
+
+        Returns:
+            Pose and its directional derivative in the stored pose representation.
+        """
         return jax.jvp(
             lambda s_value: self._absolute_forward_kinematics(q, s_value), (s,), (sd,)
         )
@@ -5521,25 +5530,9 @@ class GVS(SoftRobot):
         Returns:
             B (Array): Inertia matrix, shape (num_dofs, num_dofs)
         """
-        if has_custom_inertia(self.params.link):
-            return self._assemble_dynamics_terms(
-                q, jnp.zeros(self.num_velocities, dtype=q.dtype)
-            )[0]
-
-        if self.floating_base:
-            zeros = jnp.zeros((self.num_velocities,), dtype=q.dtype)
-            return self._assemble_dynamics_terms(q, zeros)[0]
-        weights, _, J_quads = self._integration_pose_jacobians(q)
-        Ms_inner = self._inner_mass_matrices()
-
-        def segment_terms(i: Array) -> Array:
-            def point_term(j: Array) -> Array:
-                J_ij = J_quads[i, j]
-                return self._inertia_integrand(weights[i, j], J_ij, Ms_inner[i, j])
-
-            return vmap(point_term)(jnp.arange(self.max_num_integration_points - 2))
-
-        return jnp.sum(vmap(segment_terms)(jnp.arange(self.num_segments)), axis=(0, 1))
+        return self._assemble_dynamics_terms(
+            q, jnp.zeros((self.num_velocities,), dtype=q.dtype)
+        )[0]
 
     def _assemble_floating_dynamics_terms(
         self, q: Array, v: Array
@@ -5818,10 +5811,6 @@ class GVS(SoftRobot):
     def _elastic_energy(self, q: Array) -> Array:
         """Return body strain energy plus installed passive-element energy."""
         return 0.5 * q @ self.K @ q + self.passive_elastic_energy(q)
-
-    def _kinetic_energy_inertia_matrix(self, q: Array, qd: Array) -> Array:
-        """Reuse the protected JAX dynamics assembly; unused force outputs are pruned."""
-        return self._assemble_dynamics_terms(q, qd)[0]
 
     @eqx.filter_jit
     def _gravitational_energy(self, q: Array) -> Array:

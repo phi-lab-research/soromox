@@ -711,7 +711,7 @@ def test_disabled_base_kinematics_skips_analytical_hooks(operation, monkeypatch)
     def forbidden(*args, **kwargs):
         raise AssertionError("disabled analytical hook was called")
 
-    monkeypatch.setattr(type(robot), f"_{operation}_jvp", forbidden)
+    monkeypatch.setattr(type(robot), f"_analytical_{operation}_jvp", forbidden)
     with custom_jvp_mode(False):
         actual = jax.jit(jax.jacrev(getattr(robot, operation), argnums=(0, 1)))(q, s)
         expected = jax.jit(jax.jacrev(getattr(robot, f"_{operation}"), argnums=(0, 1)))(
@@ -734,7 +734,11 @@ def test_unconfigured_transform_uses_autodiff(operation, transform, monkeypatch)
     def forbidden(*args, **kwargs):
         raise AssertionError("default mode entered an optional analytical rule")
 
-    for hook in ("_forward_kinematics_jvp", "_jacobian_jvp", "_analytical_energy_jvp"):
+    for hook in (
+        "_analytical_forward_kinematics_jvp",
+        "_analytical_jacobian_jvp",
+        "_analytical_energy_jvp",
+    ):
         monkeypatch.setattr(type(robot), hook, forbidden)
 
     def output(q, public):

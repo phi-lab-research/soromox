@@ -8,22 +8,11 @@ where code, input data, and canonical outputs are versioned together.
 
 ```text
 examples/
-├── differentiation/              # autodiff default and explicit custom-rule opt-in
+├── simulation/                   # articulated, gvs, hsa, pcs, and pendulum
+├── control/                      # actuation_space and operational_space
+├── differentiation/              # kinematics, dynamics, and energy derivatives
 ├── data/                         # optional inputs shared by multiple topics
-├── rendering/                    # Open3D and Viser scene presets and comparison gallery
-├── control/
-│   ├── actuation_space/
-│   │   ├── figures/              # generated, ignored by Git
-│   │   └── setpoint_regulation_comparison.py
-│   └── operational_space/
-│       ├── figures/              # generated, ignored by Git
-│       └── control_tendon_actuated_pcs_with_synergistic.py
-└── simulation/
-    ├── articulated/              # scripts plus generated videos/
-    ├── gvs/                      # scripts
-    ├── hsa/                      # scripts plus generated videos/
-    ├── pcs/                      # scripts plus generated videos/
-    └── pendulum/                 # scripts plus generated videos/
+└── rendering/                    # Open3D and Viser presets and comparisons
 ```
 
 An example writes generated figures or videos beside its script in `figures/`
@@ -49,8 +38,9 @@ API in a fresh process; mixing them with modern GUI windows on macOS is unsuppor
 
 ## Differentiation
 
-`python examples/differentiation/derivative_modes.py` computes a PCS state JVP
-using the package's default autodiff. For this large full-strain CPU workload,
+`python examples/differentiation/derivative_modes.py` computes pose sensitivities,
+a PCS state JVP, and total-energy gradients using default autodiff. To exercise
+custom rules explicitly,
 opt in explicitly with:
 
 ```bash

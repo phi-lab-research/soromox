@@ -32,6 +32,13 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Fixed
 
+- Use the rotation norm before epsilon clamping for small-angle motion-subspace
+  derivative selection.
+- Share the efficient inertia computation through `inertia_matrix`, including
+  kinetic energy and its derivatives.
+- Use `inverse_dynamics` in computed-torque and feedforward controllers and
+  `passive_force` in operational-space impedance compensation.
+
 - Enforce analytical derivative opt-in at shared dynamics boundaries, including
   model extension hooks and accelerated adapters.
 - Honor `passive_force` overrides consistently in forward and inverse dynamics

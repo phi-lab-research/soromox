@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from jax import Array
 
@@ -99,7 +99,15 @@ class ForwardDynamicsModel(DynamicsModel, Protocol):
         ...
 
     def passive_force(self, q: Array, qd: Array) -> Array:
-        """Return total passive effort on the required-effort side of dynamics."""
+        """Return total passive effort on the required-effort side of dynamics.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+
+        Returns:
+            Elastic and damping effort, shape ``(num_velocities,)``.
+        """
 
         ...
 
@@ -214,16 +222,18 @@ class KinematicsModel(Protocol):
 
         ...
 
-    def _forward_kinematics_jvp(
-        self,
-        q: Array,
-        s: Array,
-        qd: Array | None,
-        sd: Array | None,
-        *,
-        model_tangent: Any = None,
-    ) -> tuple[Array, Array]:
-        """Return the total model, configuration, and abscissa pose JVP."""
+    def _analytical_forward_kinematics_jvp(
+        self, primals: tuple, tangents: tuple
+    ) -> tuple[Array, Array] | None:
+        """Select an optional pose derivative action.
+
+        Args:
+            primals: Model, configuration, and scalar backbone coordinate.
+            tangents: Corresponding directions; inactive leaves are ``None``.
+
+        Returns:
+            Pose and direction, or ``None`` for autodiff.
+        """
 
         ...
 
