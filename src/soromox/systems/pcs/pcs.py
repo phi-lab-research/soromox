@@ -4,7 +4,7 @@ __all__ = ["PCS"]
 from typing import Any, Self
 
 import equinox as eqx
-from jax import Array, lax, tree_util, vmap
+from jax import Array, jacfwd, jvp, lax, tree_util, vmap
 from jax import numpy as jnp
 
 from soromox.actuation.core import Actuator, IdentityActuator, PassiveElement
@@ -21,6 +21,7 @@ from soromox.actuation.threadlike import (
     ThreadlikeImpedance,
     ThreadlikeRouting,
 )
+from soromox.autodiff import custom_jvp_enabled
 from soromox.execution import (
     DEFAULT_PCS_BLOCK_DIM,
     PCS_ACTUATION,
@@ -35,7 +36,6 @@ from soromox.execution import (
     dispatch_kinematics_abscissa_batched,
     evaluate_forward_dynamics,
 )
-from soromox.autodiff import custom_jvp_enabled
 from soromox.systems.components import (
     ContinuumLinkParams,
     CrossSectionGeometry,
@@ -3529,21 +3529,21 @@ class PCS(SoftRobot):
         Compute the routed-length moment-matrix directional derivative.
 
         Args:
-            q (Array): Generalized coordinates. Shape is ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is ``(self.num_velocities,)``.
             q_tangent (Array): Directional derivative of ``q``. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             routing (ThreadlikeRouting): Runtime routing functions for the
                 threadlike paths.
 
         Returns:
             moment_matrix_tangent (Array): Directional derivative of the raw
             routed-length moment matrix. Shape is
-            ``(self.num_dofs, routing.num_paths)``.
+            ``(self.num_velocities, routing.num_paths)``.
         """
         params = routing.params
         count = params.num_paths
         if count == 0:
-            return jnp.zeros((self.num_dofs, 0), dtype=q.dtype)
+            return jnp.zeros((self.num_velocities, 0), dtype=q.dtype)
         strains = self.strain(q).reshape((self.num_segments, 6))
         strain_tangents = (self.B_xi @ q_tangent).reshape((self.num_segments, 6))
 
@@ -3592,21 +3592,21 @@ class PCS(SoftRobot):
         Compute the actuation-force directional derivative with respect to state.
 
         Args:
-            q (Array): Generalized coordinates. Shape is ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is ``(self.num_velocities,)``.
             u (Array): Ordered actuator controls. Shape is
                 ``(self.num_actuators,)``.
             q_tangent (Array): Directional derivative of ``q``. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
             force_tangent (Array): Directional derivative of the generalized
-            actuation force. Shape is ``(self.num_dofs,)``.
+            actuation force. Shape is ``(self.num_velocities,)``.
 
         Raises:
             NotImplementedError: If an installed actuator has no analytical
                 PCS state-pushforward implementation.
         """
-        force_tangent = jnp.zeros((self.num_dofs,), dtype=q.dtype)
+        force_tangent = jnp.zeros((self.num_velocities,), dtype=q.dtype)
         start = 0
         for actuator in self.actuators:
             stop = start + actuator.num_channels
@@ -3644,22 +3644,22 @@ class PCS(SoftRobot):
         elastic force and the passive damping force.
 
         Args:
-            q (Array): Generalized coordinates. Shape is ``(self.num_dofs,)``.
-            qd (Array): Generalized velocities. Shape is ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is ``(self.num_velocities,)``.
+            qd (Array): Generalized velocities. Shape is ``(self.num_velocities,)``.
             q_tangent (Array): Directional derivative of ``q``. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qd_tangent (Array): Directional derivative of ``qd``. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
             force_tangent (Array): Directional derivative of the generalized
-            passive applied force. Shape is ``(self.num_dofs,)``.
+            passive applied force. Shape is ``(self.num_velocities,)``.
 
         Raises:
             NotImplementedError: If an installed passive element has no
                 analytical PCS state-pushforward implementation.
         """
-        force_tangent = jnp.zeros((self.num_dofs,), dtype=q.dtype)
+        force_tangent = jnp.zeros((self.num_velocities,), dtype=q.dtype)
         for element in self.passive_elements:
             if not isinstance(element, ThreadlikeImpedance):
                 raise NotImplementedError(
@@ -3667,7 +3667,7 @@ class PCS(SoftRobot):
                     f"pushforward; unsupported component: {type(element).__name__}."
                 )
 
-            moment_matrix = self._threadlike_moment_matrix(q, element.routing)
+            moment_matrix = self._threadlike_path_length_jacobian(q, element.routing).T
             moment_matrix_tangent = self._threadlike_moment_matrix_state_pushforward(
                 q,
                 q_tangent,
@@ -4119,18 +4119,18 @@ class PCS(SoftRobot):
         Return segment strains, strain rates, and active strain bases.
 
         Args:
-            q: Active generalized coordinates, shape ``(self.num_dofs,)``.
-            qd: Active generalized velocities, shape ``(self.num_dofs,)``.
+            q: Active generalized coordinates, shape ``(self.num_velocities,)``.
+            qd: Active generalized velocities, shape ``(self.num_velocities,)``.
 
         Returns:
             Tuple ``(xi, xid, B_xi_segments)``. The strain arrays have shape
             ``(self.num_segments, 6)`` and the basis has shape
-            ``(self.num_segments, 6, self.num_dofs)``.
+            ``(self.num_segments, 6, self.num_velocities)``.
         """
         return (
             self.strain(q).reshape(self.num_segments, 6),
             (self.B_xi @ qd).reshape(self.num_segments, 6),
-            self.B_xi.reshape(self.num_segments, 6, self.num_dofs),
+            self.B_xi.reshape(self.num_segments, 6, self.num_velocities),
         )
 
     def _dynamics_quadrature(self) -> tuple[Array, Array]:
@@ -4402,7 +4402,7 @@ class PCS(SoftRobot):
         Assemble dynamics terms and optional contracted state derivatives.
 
         Args:
-            qd: Active generalized velocities, shape ``(self.num_dofs,)``.
+            qd: Active generalized velocities, shape ``(self.num_velocities,)``.
             weights: Segment quadrature weights, shape
                 ``(self.num_segments, self.num_gauss_points)``.
             gravity: Body-frame gravity at each quadrature point.
@@ -4417,8 +4417,8 @@ class PCS(SoftRobot):
         Returns:
             Tuple ``(B, Cqd, G)`` when no directional arrays are supplied.
             Supplying them appends ``(dB, dCqd, dG)``. Matrices have shape
-            ``(self.num_dofs, self.num_dofs)`` and vectors have shape
-            ``(self.num_dofs,)``.
+            ``(self.num_velocities, self.num_velocities)`` and vectors have shape
+            ``(self.num_velocities,)``.
         """
         directional_arguments = (
             qd_direction,
@@ -4438,9 +4438,11 @@ class PCS(SoftRobot):
             assert jacobian_directions is not None
             assert convective_directions is not None
 
-        inertia = jnp.zeros((self.num_dofs, self.num_dofs), dtype=jacobians.dtype)
-        coriolis_qd = jnp.zeros((self.num_dofs,), dtype=jacobians.dtype)
-        gravity_force = jnp.zeros((self.num_dofs,), dtype=jacobians.dtype)
+        inertia = jnp.zeros(
+            (self.num_velocities, self.num_velocities), dtype=jacobians.dtype
+        )
+        coriolis_qd = jnp.zeros((self.num_velocities,), dtype=jacobians.dtype)
+        gravity_force = jnp.zeros((self.num_velocities,), dtype=jacobians.dtype)
         if has_direction:
             inertia_direction = jnp.zeros_like(inertia)
             coriolis_qd_direction = jnp.zeros_like(coriolis_qd)
@@ -4565,11 +4567,12 @@ class PCS(SoftRobot):
         Segment power preparation is shared by every quadrature point and the
         segment tip. The recurrence propagates the body Jacobian, convective
         acceleration, and gravity together with one contracted state
-        direction; no autodiff or full state Jacobian is used.
+        direction. Floating states and custom inertia use the current JAX
+        assembly instead of this fixed-base analytical recurrence.
 
         Args:
-            q: Active generalized coordinates, shape ``(self.num_dofs,)``.
-            qd: Active generalized velocities, shape ``(self.num_dofs,)``.
+            q: Active generalized coordinates, shape ``(self.num_velocities,)``.
+            qd: Active generalized velocities, shape ``(self.num_velocities,)``.
             q_direction: Contracted configuration direction with the same
                 shape as ``q``.
             qd_direction: Contracted velocity direction with the same shape
@@ -4579,9 +4582,18 @@ class PCS(SoftRobot):
             Tuple ``(B, Cqd, G, dB, dCqd, dG)``. The first three arrays are
             the primal dynamics terms. The final three are their directional
             state derivatives; ``B`` and ``dB`` have shape
-            ``(self.num_dofs, self.num_dofs)`` and all vectors have shape
-            ``(self.num_dofs,)``.
+            ``(self.num_velocities, self.num_velocities)`` and all vectors have shape
+            ``(self.num_velocities,)``.
         """
+        if self.floating_base or self._has_custom_inertia:
+            values, directions = jvp(
+                lambda position, velocity: self.dynamics_terms(
+                    position, velocity, backend="jax"
+                ),
+                (q, qd),
+                (q_direction, qd_direction),
+            )
+            return (*values, *directions)
         xi, xid, B_xi_segments = self._dynamics_strain_inputs(q, qd)
         configuration_directions = (self.B_xi @ q_direction).reshape(
             self.num_segments,
@@ -4601,7 +4613,7 @@ class PCS(SoftRobot):
         weights, s_local = self._dynamics_quadrature()
 
         zeros_6 = jnp.zeros((6,), dtype=q.dtype)
-        zeros_6n = jnp.zeros((6, self.num_dofs), dtype=q.dtype)
+        zeros_6n = jnp.zeros((6, self.num_velocities), dtype=q.dtype)
         gravity_initial = se3.adjoint_inverse(self.g0) @ self.g
         carry_initial = (
             zeros_6n,
@@ -4940,16 +4952,53 @@ class PCS(SoftRobot):
             ValueError: If ``actuation_args`` does not contain one or two
                 elements.
         """
-        if custom_jvp_enabled():
-            return PCS._forward_dynamics_custom_jvp(self, t, y, actuation_args)
-        return self._forward_dynamics(t, y, actuation_args)
+        return evaluate_forward_dynamics(
+            self, t, y, actuation_args, backend, PCS_DYNAMICS
+        )
 
     def _forward_dynamics(
         self, t: Array, y: Array, actuation_args: tuple | None = None
     ) -> Array:
-        """Evaluate the PCS forward-dynamics primal without a custom JVP."""
-        yd, _ = self._forward_dynamics_with_inertia(t, y, actuation_args)
-        return yd
+        """Evaluate the current JAX equations without the analytical FD rule."""
+        from soromox.execution.transforms import _assemble_forward_dynamics
+
+        return _assemble_forward_dynamics(
+            self, t, y, actuation_args, backend="jax", capabilities=PCS_DYNAMICS
+        )
+
+    def _supports_analytical_dynamics(self) -> bool:
+        """Whether the original PCS recurrences cover this model's physics.
+
+        Floating states, distributed/attached custom inertia, friction, and
+        other routing/effort laws use the shared differentiable JAX equations.
+        This structural check never branches on tangent values.
+        """
+        return (
+            not self.floating_base
+            and not self._has_custom_inertia
+            and all(
+                isinstance(a, IdentityActuator)
+                or (
+                    isinstance(a, ThreadlikeActuator)
+                    and isinstance(a.transmission.routing, ThreadlikeRouting)
+                    and a.transmission.friction.is_frictionless
+                )
+                for a in self.actuators
+            )
+            and all(
+                isinstance(e, ThreadlikeImpedance)
+                and isinstance(e.routing, ThreadlikeRouting)
+                for e in self.passive_elements
+            )
+        )
+
+    def _analytical_forward_dynamics_jvp(
+        self, primals: tuple[Any, ...], tangents: tuple[Any, ...]
+    ) -> tuple[Array, Array] | None:
+        """Optional shared-execution hook; return None for unsupported physics."""
+        if not custom_jvp_enabled() or not self._supports_analytical_dynamics():
+            return None
+        return PCS._forward_dynamics_state_jvp(primals, tangents)
 
     def _forward_dynamics_with_inertia(
         self, t: Array, y: Array, actuation_args: tuple | None = None
@@ -4958,7 +5007,7 @@ class PCS(SoftRobot):
         del t
 
         # Split the state vector into configuration and velocity
-        q, qd = jnp.split(y, 2)
+        q, qd, auxiliary = self.split_state(y)
 
         # split the actuation arguments if provided
         if actuation_args is None:
@@ -4972,19 +5021,21 @@ class PCS(SoftRobot):
             raise ValueError("actuation_args must be a tuple of length 1 or 2.")
 
         if u is None:
-            u = jnp.zeros((self.num_actuators,))
+            u = jnp.zeros((self.num_actuators,), dtype=y.dtype)
         if tau_ext is None:
-            tau_ext = jnp.zeros((q.shape[-1],))
+            tau_ext = jnp.zeros((self.num_velocities,), dtype=y.dtype)
 
-        B, Cqd, G = self.dynamics_terms(q, qd)
+        B, Cqd, G = self.dynamics_terms(q, qd, backend="jax")
         tau_el = self.elastic_force(q)
-        tau_u = self.actuation_force(q, u, qd=qd)
+        tau_u = self.actuation_force(q, u, qd=qd, backend="jax")
 
         rhs = tau_u + tau_ext - Cqd - G - tau_el - self.damping_matrix(q) @ qd
 
         qdd = self._solve_inertia(B, rhs)
 
-        yd = jnp.concatenate([qd, qdd])
+        yd = self.pack_state(
+            self.configuration_derivative(q, qd), qdd, jnp.zeros_like(auxiliary)
+        )
 
         return yd, B
 
@@ -5000,7 +5051,11 @@ class PCS(SoftRobot):
         return robot._forward_dynamics(t, y, actuation_args)
 
     @_forward_dynamics_custom_jvp.def_jvp
-    def _forward_dynamics_custom_jvp_jvp(
+    def _forward_dynamics_custom_jvp_jvp(primals, tangents):
+        return PCS._forward_dynamics_state_jvp(primals, tangents)
+
+    @staticmethod
+    def _forward_dynamics_state_jvp(
         primals: tuple["PCS", Array, Array, tuple | None],
         tangents: tuple[Any, Array | None, Array | None, tuple | None],
     ) -> tuple[Array, Array]:
@@ -5015,6 +5070,14 @@ class PCS(SoftRobot):
         are outside the state-only analytical contract.
         """
         robot, t, y, actuation_args = primals
+        if not robot._supports_analytical_dynamics():
+            return eqx.filter_jvp(
+                lambda model, time, state, inputs: model._forward_dynamics(
+                    time, state, inputs
+                ),
+                primals,
+                tangents,
+            )
         robot_tangent, _, y_tangent, actuation_args_tangent = tangents
 
         robot_has_tangent = any(
@@ -5072,7 +5135,7 @@ class PCS(SoftRobot):
             )
             _, qdd = jnp.split(yd, 2)
             inverse_dynamics_tangent = jnp.zeros_like(q)
-        elif robot.num_dofs > _FUSED_STATE_PUSHFORWARD_MAX_DOFS:
+        elif robot.num_velocities > _FUSED_STATE_PUSHFORWARD_MAX_DOFS:
             # For large dense systems, carrying one contracted wrench direction
             # is cheaper than materializing the directional inertia matrix.
             yd, mass_matrix = robot._forward_dynamics_with_inertia(
@@ -5103,7 +5166,7 @@ class PCS(SoftRobot):
                 qd_tangent,
             )
             applied_force = (
-                robot.actuation_force(q, u, qd=qd)
+                robot.actuation_force(q, u, qd=qd, backend="jax")
                 + tau_ext
                 - robot.elastic_force(q)
                 - robot.damping_matrix(q) @ qd
@@ -5136,7 +5199,7 @@ class PCS(SoftRobot):
         if u_has_tangent:
             applied_force_tangent = (
                 applied_force_tangent
-                + robot.actuation_force_derivative_u(q) @ u_tangent
+                + robot.actuation_matrix(q, backend="jax") @ u_tangent
             )
         if tau_ext_has_tangent:
             applied_force_tangent = applied_force_tangent + tau_ext_tangent
@@ -5145,11 +5208,11 @@ class PCS(SoftRobot):
 
             def dynamics_residual(robot_value: "PCS") -> Array:
                 mass_matrix_value, coriolis_qd, gravity_force = (
-                    robot_value.dynamics_terms(q, qd)
+                    robot_value.dynamics_terms(q, qd, backend="jax")
                 )
                 inverse_dynamics = mass_matrix_value @ qdd + coriolis_qd + gravity_force
                 applied_force = (
-                    robot_value.actuation_force(q, u, qd=qd)
+                    robot_value.actuation_force(q, u, qd=qd, backend="jax")
                     + tau_ext
                     - robot_value.elastic_force(q)
                     - robot_value.damping_matrix(q) @ qd
@@ -5191,24 +5254,24 @@ class PCS(SoftRobot):
             H (Array): Length of the local quadrature interval. Shape is
                 ``()``.
             q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qd (Array): Active generalized velocities. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qdd (Array): Active generalized accelerations. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
             tuple[Array, Array, Array, Array, Array]: Tuple
             ``(g_local, S, Sd, deta_dq, detad_dq)``, where ``g_local`` is the
             interval transformation with shape ``(4, 4)``. The remaining
-            arrays have shape ``(6, self.num_dofs)`` and contain the local
+            arrays have shape ``(6, self.num_velocities)`` and contain the local
             joint motion subspace, its time derivative, and the configuration
             derivatives of the local velocity and acceleration twists.
         """
         B_xi_segments = self.B_xi.reshape(
             self.num_segments,
             6,
-            self.num_dofs,
+            self.num_velocities,
         )
         xi_ref_segments = self.xi_ref.reshape(self.num_segments, 6)
 
@@ -5487,11 +5550,11 @@ class PCS(SoftRobot):
 
         Args:
             q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qd (Array): Active generalized velocities. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qdd (Array): Active generalized accelerations. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
             tuple[Array, ...]: Tuple ``(segment_indices, H, mass_weights, g,
@@ -5502,7 +5565,7 @@ class PCS(SoftRobot):
             shape ``(num_intervals, 4, 4)``; ``eta`` and ``etad`` have shape
             ``(num_intervals, 6)``; ``J``, ``Jdot``, ``R``, ``A``, ``Y``,
             and ``S`` have shape
-            ``(num_intervals, 6, self.num_dofs)``; and ``Adginv`` has shape
+            ``(num_intervals, 6, self.num_velocities)``; and ``Adginv`` has shape
             ``(num_intervals, 6, 6)``.
         """
         (
@@ -5521,7 +5584,7 @@ class PCS(SoftRobot):
             qdd,
         )
 
-        zeros_6n = jnp.zeros((6, self.num_dofs), dtype=q.dtype)
+        zeros_6n = jnp.zeros((6, self.num_velocities), dtype=q.dtype)
         zeros_6 = jnp.zeros((6,), dtype=q.dtype)
         carry_init = (
             self.g0,
@@ -5678,7 +5741,7 @@ class PCS(SoftRobot):
         B_xi_segments = self.B_xi.reshape(
             self.num_segments,
             6,
-            self.num_dofs,
+            self.num_velocities,
         )
         B_xi_local_segments = vmap(
             lambda basis, indices, mask: basis[:, indices] * mask[None, :]
@@ -5881,20 +5944,29 @@ class PCS(SoftRobot):
         coordinates by ``S.T @ F_res``.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
             qd (Array): Active generalized velocities. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qdd (Array): Active generalized accelerations. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
             tuple[Array, Array]: The inverse-dynamics derivatives
-            ``(dID_dq, dID_dqd)``. Each derivative has shape
-            ``(self.num_dofs, self.num_dofs)``. The acceleration derivative
+            ``(dID_dq, dID_dqd)``. Their shapes are ``(self.num_velocities, self.num_coordinates)``
+            and ``(self.num_velocities, self.num_velocities)``. The acceleration derivative
             ``dID/dqdd`` is the generalized inertia matrix and should be
             obtained from the forward-dynamics primal or ``inertia_matrix``.
         """
+        if not self._supports_analytical_dynamics():
+
+            def inertial_force(q_value, qd_value):
+                mass, convective, gravity = self.dynamics_terms(
+                    q_value, qd_value, backend="jax"
+                )
+                return mass @ qdd + convective + gravity
+
+            return jacfwd(inertial_force, argnums=(0, 1))(q, qd)
         (
             segment_indices,
             H_steps,
@@ -5912,12 +5984,12 @@ class PCS(SoftRobot):
         ) = self._inverse_dynamics_jacobian_forward_pass(q, qd, qdd)
 
         zeros_6 = jnp.zeros((6,), dtype=q.dtype)
-        zeros_6n = jnp.zeros((6, self.num_dofs), dtype=q.dtype)
-        zeros_nn = jnp.zeros((self.num_dofs, self.num_dofs), dtype=q.dtype)
+        zeros_6n = jnp.zeros((6, self.num_velocities), dtype=q.dtype)
+        zeros_nn = jnp.zeros((self.num_velocities, self.num_velocities), dtype=q.dtype)
         B_xi_segments = self.B_xi.reshape(
             self.num_segments,
             6,
-            self.num_dofs,
+            self.num_velocities,
         )
         xi_ref_segments = self.xi_ref.reshape(self.num_segments, 6)
         carry_init = (
@@ -6078,18 +6150,31 @@ class PCS(SoftRobot):
         inverse-dynamics Jacobians.
 
         Args:
-            q: Generalized coordinates with shape ``(self.num_dofs,)``.
-            qd: Generalized velocities with shape ``(self.num_dofs,)``.
-            qdd: Generalized accelerations with shape ``(self.num_dofs,)``.
+            q: Generalized coordinates with shape ``(self.num_coordinates,)``.
+            qd: Generalized velocities with shape ``(self.num_velocities,)``.
+            qdd: Generalized accelerations with shape ``(self.num_velocities,)``.
             q_directions: Configuration directions with shape
-                ``(self.num_dofs, num_directions)``.
+                ``(self.num_coordinates, num_directions)``.
             qd_directions: Velocity directions with shape
-                ``(self.num_dofs, num_directions)``.
+                ``(self.num_velocities, num_directions)``.
 
         Returns:
             The directional inverse-dynamics derivatives with shape
-            ``(self.num_dofs, num_directions)``.
+            ``(self.num_velocities, num_directions)``.
         """
+        if not self._supports_analytical_dynamics():
+
+            def inertial_force(q_value, qd_value):
+                mass, convective, gravity = self.dynamics_terms(
+                    q_value, qd_value, backend="jax"
+                )
+                return mass @ qdd + convective + gravity
+
+            return vmap(
+                lambda dq, dv: jvp(inertial_force, (q, qd), (dq, dv))[1],
+                in_axes=(1, 1),
+                out_axes=1,
+            )(q_directions, qd_directions)
         (
             segment_indices,
             mass_weights,
@@ -6114,7 +6199,7 @@ class PCS(SoftRobot):
         zeros_6 = jnp.zeros((6,), dtype=q.dtype)
         zeros_6k = jnp.zeros((6, num_directions), dtype=q.dtype)
         zeros_nk = jnp.zeros(
-            (self.num_dofs, num_directions),
+            (self.num_velocities, num_directions),
             dtype=q.dtype,
         )
         dof_indices, dof_mask = self._segment_local_dof_layout()
@@ -6228,16 +6313,17 @@ class PCS(SoftRobot):
         Return inverse-dynamics derivatives from the analytical PCS passes.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
             qd (Array): Active generalized velocities. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qdd (Array): Active generalized accelerations. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
-            tuple[Array, Array]: The derivatives ``(dID_dq, dID_dqd)``. Both
-            arrays have shape ``(self.num_dofs, self.num_dofs)``.
+            tuple[Array, Array]: The derivatives ``(dID_dq, dID_dqd)`` with shapes
+            ``(self.num_velocities, self.num_coordinates)`` and
+            ``(self.num_velocities, self.num_velocities)``, respectively.
         """
         dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(
             q,
@@ -6249,18 +6335,17 @@ class PCS(SoftRobot):
     @eqx.filter_jit
     def elastic_force_derivative_q(self, q: Array) -> Array:
         """
-        Return the analytical configuration derivative of the elastic force.
+        Return the elastic-force derivative, including installed passive elements.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
 
         Returns:
             Array: Derivative ``d(tau_el) / d(q)`` with shape
-            ``(self.num_dofs, self.num_dofs)``.
+            ``(self.num_velocities, self.num_coordinates)``.
         """
-        del q
-        return self.stiffness_matrix()
+        return jacfwd(self.elastic_force)(q)
 
     @eqx.filter_jit
     def damping_force_derivatives(
@@ -6269,63 +6354,72 @@ class PCS(SoftRobot):
         qd: Array,
     ) -> tuple[Array, Array]:
         """
-        Return analytical derivatives of the generalized damping force.
+        Return damping-force derivatives, including installed passive elements.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
             qd (Array): Active generalized velocities. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
 
         Returns:
             tuple[Array, Array]: Derivatives of ``damping_matrix(q) @ qd``
-            with respect to ``q`` and ``qd``, respectively. Both arrays have
-            shape ``(self.num_dofs, self.num_dofs)``.
+            with respect to ``q`` and ``qd``. Their shapes are
+            ``(self.num_velocities, self.num_coordinates)`` and
+            ``(self.num_velocities, self.num_velocities)``, respectively.
         """
-        del qd
-        return (
-            jnp.zeros((q.shape[0], q.shape[0]), dtype=q.dtype),
-            self.damping_matrix(q),
-        )
+        return jacfwd(
+            lambda position, velocity: self.damping_matrix(position) @ velocity,
+            argnums=(0, 1),
+        )(q, qd)
 
     @eqx.filter_jit
     def actuation_force_derivative_q(
         self,
         q: Array,
         u: Array,
+        qd: Array | None = None,
     ) -> Array:
         """
-        Return the analytical configuration derivative of the actuation force.
+        Return the actuation-force configuration derivative at fixed control and velocity.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
             u (Array): Actuation inputs. Shape is ``(self.num_actuators,)``.
+            qd (Array, optional): Generalized velocities. Defaults to zero.
 
         Returns:
             Array: Derivative ``d(tau_u) / d(q)`` with shape
-            ``(self.num_dofs, self.num_dofs)``.
+            ``(self.num_velocities, self.num_coordinates)``.
         """
-        del u
-        return jnp.zeros((q.shape[0], q.shape[0]), dtype=q.dtype)
+        return jacfwd(lambda position: self._actuation_force(position, u, qd))(q)
 
     @eqx.filter_jit
     def actuation_force_derivative_u(
         self,
         q: Array,
+        u: Array | None = None,
+        qd: Array | None = None,
     ) -> Array:
         """
-        Return the analytical input derivative of the actuation force.
+        Return the actuation-force input derivative at the supplied operating point.
+
+        Omitted controls and velocities default to zero.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
+            u (Array, optional): Controls at the operating point. Defaults to zero.
+            qd (Array, optional): Generalized velocities. Defaults to zero.
 
         Returns:
             Array: Derivative ``d(tau_u) / d(u)`` with shape
-            ``(self.num_dofs, self.num_actuators)``.
+            ``(self.num_velocities, self.num_actuators)``.
         """
-        return self.actuation_matrix(q)
+        if u is None:
+            u = jnp.zeros((self.num_actuators,), dtype=q.dtype)
+        return jacfwd(lambda control: self._actuation_force(q, control, qd))(u)
 
     @eqx.filter_jit
     def forward_dynamics_derivatives(
@@ -6343,22 +6437,24 @@ class PCS(SoftRobot):
         ``dqdd_dq = M \\ (dtau_dq - dID_dq)``
         ``dqdd_dqd = M \\ (dtau_dqd - dID_dqd)``
 
-        For base PCS, ``dtau_dq = -K`` and ``dtau_dqd = -D`` because the
-        actuation matrix, stiffness, and damping are configuration independent.
+        For fixed-base PCS with identity actuation and no installed passive
+        elements, ``dtau_dq = -K`` and ``dtau_dqd = -D``. Other component
+        laws contribute their configuration and velocity derivatives.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
             qd (Array): Active generalized velocities. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             qdd (Array): Active generalized accelerations. Shape is
-                ``(self.num_dofs,)``.
+                ``(self.num_velocities,)``.
             u (Array, optional): Actuation inputs. Shape is
                 ``(self.num_actuators,)``. Defaults to a zero input.
 
         Returns:
-            tuple[Array, Array]: Derivatives ``(dqdd_dq, dqdd_dqd)``. Both
-            arrays have shape ``(self.num_dofs, self.num_dofs)``.
+            tuple[Array, Array]: Derivatives ``(dqdd_dq, dqdd_dqd)`` with shapes
+            ``(self.num_velocities, self.num_coordinates)`` and
+            ``(self.num_velocities, self.num_velocities)``, respectively.
         """
         if u is None:
             u = jnp.zeros((self.num_actuators,), dtype=q.dtype)
@@ -6383,12 +6479,14 @@ class PCS(SoftRobot):
         """Return state derivatives while reusing an assembled inertia matrix."""
         dID_dq, dID_dqd = self.inverse_dynamics_backward_pass(q, qd, qdd)
 
-        d_elastic_dq = self.elastic_force_derivative_q(q)
-        d_damping_dq, d_damping_dqd = self.damping_force_derivatives(q, qd)
-        d_actuation_dq = self.actuation_force_derivative_q(q, u)
+        def applied_force(q_value, qd_value):
+            return (
+                self._actuation_force(q_value, u, qd_value)
+                - self.elastic_force(q_value)
+                - self.damping_matrix(q_value) @ qd_value
+            )
 
-        dtau_dq = d_actuation_dq - d_elastic_dq - d_damping_dq
-        dtau_dqd = -d_damping_dqd
+        dtau_dq, dtau_dqd = jacfwd(applied_force, argnums=(0, 1))(q, qd)
 
         dqdd_dq = self._solve_inertia(mass_matrix, dtau_dq - dID_dq)
         dqdd_dqd = self._solve_inertia(mass_matrix, dtau_dqd - dID_dqd)
@@ -6399,38 +6497,48 @@ class PCS(SoftRobot):
     def forward_dynamics_input_derivatives(
         self,
         q: Array,
+        u: Array | None = None,
+        qd: Array | None = None,
     ) -> tuple[Array, Array]:
         """
-        Return analytical ``dqdd/du`` and ``dqdd/dtau_ext``.
+        Return ``dqdd/du`` and ``dqdd/dtau_ext`` at the supplied operating point.
+
+        Omitted controls and velocities default to zero.
 
         ``tau_ext`` is the direct generalized-force input used by
         ``forward_dynamics``. Its derivative is therefore ``M(q)^{-1}``.
 
         Args:
-            q (Array): Active generalized coordinates. Shape is
-                ``(self.num_dofs,)``.
+            q (Array): Generalized coordinates. Shape is
+                ``(self.num_coordinates,)``.
+            u (Array, optional): Controls at the operating point. Defaults to zero.
+            qd (Array, optional): Generalized velocities. Defaults to zero.
 
         Returns:
             tuple[Array, Array]: Derivatives ``(dqdd_du, dqdd_dtau_ext)``.
-            Their shapes are ``(self.num_dofs, self.num_actuators)`` and
-            ``(self.num_dofs, self.num_dofs)``, respectively.
+            Their shapes are ``(self.num_velocities, self.num_actuators)`` and
+            ``(self.num_velocities, self.num_velocities)``, respectively.
         """
         mass_matrix = self.inertia_matrix(q)
-        return self._forward_dynamics_input_derivatives_with_inertia(q, mass_matrix)
+        return self._forward_dynamics_input_derivatives_with_inertia(
+            q, mass_matrix, u, qd
+        )
 
     def _forward_dynamics_input_derivatives_with_inertia(
         self,
         q: Array,
         mass_matrix: Array,
+        u: Array | None = None,
+        qd: Array | None = None,
     ) -> tuple[Array, Array]:
         """Return input derivatives while reusing an assembled inertia matrix."""
         dqdd_du = self._solve_inertia(
             mass_matrix,
-            self.actuation_force_derivative_u(q),
+            self.actuation_force_derivative_u(q, u, qd),
         )
         dqdd_dtau_ext = self._solve_inertia(
             mass_matrix,
-            jnp.eye(q.shape[0], dtype=q.dtype),
+            jnp.eye(self.num_velocities, dtype=q.dtype),
         )
 
         return dqdd_du, dqdd_dtau_ext
@@ -6449,16 +6557,18 @@ class PCS(SoftRobot):
 
         Args:
             t (Array): Current time. Shape is ``()``.
-            y (Array): State ``[q, qd]``. Shape is
-                ``(2 * self.num_dofs,)``.
+            y (Array): Packed state with shape ``(self.state_size,)``.
             actuation_args (tuple, optional): Tuple containing ``u`` with
                 shape ``(self.num_actuators,)`` and optionally ``tau_ext``
-                with shape ``(self.num_dofs,)``. Defaults to zero inputs.
+                with shape ``(self.num_velocities,)``. Defaults to zero inputs.
 
         Returns:
-            Array: State Jacobian ``d([qd, qdd]) / d([q, qd])`` with shape
-            ``(2 * self.num_dofs, 2 * self.num_dofs)``.
+            Array: State Jacobian with shape ``(self.state_size, self.state_size)``.
         """
+        if not self._supports_analytical_dynamics():
+            return jacfwd(
+                lambda state: self._forward_dynamics(t, state, actuation_args)
+            )(y)
         q, qd = jnp.split(y, 2)
 
         if actuation_args is None:
@@ -6490,7 +6600,7 @@ class PCS(SoftRobot):
             mass_matrix,
         )
 
-        eye = jnp.eye(q.shape[0], dtype=q.dtype)
+        eye = jnp.eye(self.num_velocities, dtype=q.dtype)
         zeros = jnp.zeros_like(eye)
         return jnp.block([[zeros, eye], [dqdd_dq, dqdd_dqd]])
 
@@ -6509,19 +6619,39 @@ class PCS(SoftRobot):
 
         Args:
             t (Array): Current time. Shape is ``()``.
-            y (Array): State ``[q, qd]``. Shape is
-                ``(2 * self.num_dofs,)``.
+            y (Array): Packed state with shape ``(self.state_size,)``.
             actuation_args (tuple, optional): Tuple containing ``u`` with
                 shape ``(self.num_actuators,)`` and optionally ``tau_ext``
-                with shape ``(self.num_dofs,)``. Defaults to zero inputs.
+                with shape ``(self.num_velocities,)``. Defaults to zero inputs.
 
         Returns:
             tuple[Array, Array, Array]: State, actuation-input, and external
             generalized-force Jacobians ``(dyd_dy, dyd_du, dyd_dtau_ext)``.
-            Their shapes are ``(2 * self.num_dofs, 2 * self.num_dofs)``,
-            ``(2 * self.num_dofs, self.num_actuators)``, and
-            ``(2 * self.num_dofs, self.num_dofs)``, respectively.
+            Their shapes are ``(self.state_size, self.state_size)``,
+            ``(self.state_size, self.num_actuators)``, and
+            ``(self.state_size, self.num_velocities)``, respectively.
         """
+        if not self._supports_analytical_dynamics():
+            if actuation_args is not None and len(actuation_args) not in (1, 2):
+                raise ValueError("actuation_args must be a tuple of length 1 or 2.")
+            u = None if actuation_args is None else actuation_args[0]
+            tau_ext = (
+                actuation_args[1]
+                if actuation_args is not None and len(actuation_args) == 2
+                else None
+            )
+            u = jnp.zeros((self.num_actuators,), dtype=y.dtype) if u is None else u
+            tau_ext = (
+                jnp.zeros((self.num_velocities,), dtype=y.dtype)
+                if tau_ext is None
+                else tau_ext
+            )
+            return jacfwd(
+                lambda state, control, force: self._forward_dynamics(
+                    t, state, (control, force)
+                ),
+                argnums=(0, 1, 2),
+            )(y, u, tau_ext)
         q, qd = jnp.split(y, 2)
 
         if actuation_args is None:
@@ -6553,10 +6683,10 @@ class PCS(SoftRobot):
             mass_matrix,
         )
         dqdd_du, dqdd_dtau_ext = self._forward_dynamics_input_derivatives_with_inertia(
-            q, mass_matrix
+            q, mass_matrix, u, qd
         )
 
-        eye = jnp.eye(q.shape[0], dtype=q.dtype)
+        eye = jnp.eye(self.num_velocities, dtype=q.dtype)
         zeros = jnp.zeros_like(eye)
         dyd_dy = jnp.block([[zeros, eye], [dqdd_dq, dqdd_dqd]])
         zeros_du = jnp.zeros((q.shape[0], u.shape[0]), dtype=q.dtype)

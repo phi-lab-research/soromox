@@ -7,8 +7,8 @@ from jax import numpy as jnp
 from numpy.testing import assert_allclose
 from system_param_builders import pcs_params, spatial_base_pose
 
-from soromox.execution import PCSBackendParams
 from soromox.autodiff import custom_jvp_mode
+from soromox.execution import PCSBackendParams
 from soromox.systems import PCS, CrossSectionGeometry, PCSStructure
 from soromox.utils.integration import scale_interior_gaussian_quadrature
 from soromox.utils.lie_algebra import se3
@@ -1579,7 +1579,7 @@ def test_forward_dynamics_state_jacobian_accepts_optional_inputs(
         lambda y_value: model._forward_dynamics(t, y_value, actuation_args)
     )(y)
     zero_input = jnp.zeros((model.num_actuators,), dtype=y.dtype)
-    zero_external = jnp.zeros((model.num_dofs,), dtype=y.dtype)
+    zero_external = jnp.zeros((model.num_velocities,), dtype=y.dtype)
     expected_input = jacfwd(
         lambda u_value: model._forward_dynamics(
             t,

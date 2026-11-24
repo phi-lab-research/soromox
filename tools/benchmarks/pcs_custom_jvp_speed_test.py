@@ -144,13 +144,13 @@ def build_model(setup: str, num_segments: int, gauss_points: int) -> PCS:
 
 def build_inputs(model: PCS) -> BenchmarkInputs:
     """Return dynamic benchmark inputs and directional-JVP tangents."""
-    q = jnp.linspace(-0.025, 0.035, model.num_dofs)
-    qd = jnp.linspace(0.04, -0.03, model.num_dofs)
+    q = jnp.linspace(-0.025, 0.035, model.num_velocities)
+    qd = jnp.linspace(0.04, -0.03, model.num_velocities)
     y = jnp.concatenate([q, qd])
-    y_direction = jnp.linspace(-0.2, 0.25, 2 * model.num_dofs)
+    y_direction = jnp.linspace(-0.2, 0.25, 2 * model.num_velocities)
     u = jnp.linspace(0.05, 0.1, model.num_actuators)
     u_direction = jnp.linspace(-0.15, 0.2, model.num_actuators)
-    tau_ext = jnp.linspace(-0.01, 0.015, model.num_dofs)
+    tau_ext = jnp.linspace(-0.01, 0.015, model.num_velocities)
     system_parameters = jnp.concatenate(
         [
             model.L,
@@ -312,22 +312,22 @@ def build_workload(
         return lambda y, u, tau_ext, parameters: jax.jvp(
             lambda q_value: rollout(
                 model,
-                jnp.concatenate([q_value, y[model.num_dofs :]]),
+                jnp.concatenate([q_value, y[model.num_velocities :]]),
                 u,
                 tau_ext,
             ),
-            (y[: model.num_dofs],),
-            (y_direction[: model.num_dofs],),
+            (y[: model.num_velocities],),
+            (y_direction[: model.num_velocities],),
         )
     if workload == "rollout_initial_position_jacobian":
         return lambda y, u, tau_ext, parameters: jax.jacfwd(
             lambda q_value: rollout(
                 model,
-                jnp.concatenate([q_value, y[model.num_dofs :]]),
+                jnp.concatenate([q_value, y[model.num_velocities :]]),
                 u,
                 tau_ext,
             )
-        )(y[: model.num_dofs])
+        )(y[: model.num_velocities])
     if workload == "rollout_parameters_jvp":
         return lambda y, u, tau_ext, parameters: jax.jvp(
             lambda parameter_values: rollout(
@@ -474,7 +474,7 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                 row = {
                     "setup": setup,
                     "segment_count": num_segments,
-                    "dof": model.num_dofs,
+                    "dof": model.num_velocities,
                     "gauss_points": args.gauss_points,
                     "workload": workload,
                     "rollout_steps": args.rollout_steps,
@@ -491,7 +491,7 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                 }
                 rows.append(row)
                 print(
-                    f"{setup:21s} {num_segments:5d} {model.num_dofs:3d} "
+                    f"{setup:21s} {num_segments:5d} {model.num_velocities:3d} "
                     f"{workload:35s} {1e3 * execution_off:8.3f} "
                     f"{1e3 * execution_on:8.3f} {speedup:7.2f}x "
                     f"{compile_off:11.3f} {compile_on:10.3f} "

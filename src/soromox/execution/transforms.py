@@ -586,12 +586,10 @@ def evaluate_forward_dynamics(
 ) -> Array:
     """Evaluate compiled forward dynamics with transform-aware backend routing.
 
-    This boundary does not implement a new analytical derivative. Its custom
-    JVP exists solely to prevent a compiled primal calculation from staging a
-    forward-only Warp callback before JAX selects a derivative rule. Primal
-    calls use the model's configured backend; forward- and reverse-mode
-    transformations evaluate the same forward-dynamics equations with JAX term
-    assembly.
+    Primal calls use the configured backend. During differentiation an
+    optional model hook supplies an analytical JVP for supported physics;
+    returning None selects autodiff through the current JAX equations.
+    Both derivative routes avoid staging forward-only Warp callbacks.
 
     Args:
         model: System implementing the forward-dynamics execution contract.
@@ -624,7 +622,7 @@ def _evaluate_forward_dynamics_jvp(
     primals: tuple[Any, ...],
     tangents: tuple[Any, ...],
 ) -> tuple[Array, Array]:
-    """Differentiate forward dynamics using the model's JAX term assembly.
+    """Select a model's analytical JVP or differentiate its JAX assembly.
 
     Args:
         primals: Model, time, state, optional actuation arguments, and backend
@@ -653,6 +651,14 @@ def _evaluate_forward_dynamics_jvp(
             _backend_tangent,
             capabilities_tangent,
         ) = tangents
+    analytical_jvp = getattr(model, "_analytical_forward_dynamics_jvp", None)
+    if analytical_jvp is not None:
+        result = analytical_jvp(
+            (model, t, y, actuation_args),
+            (model_tangent, t_tangent, y_tangent, actuation_tangent),
+        )
+        if result is not None:
+            return result
     return eqx.filter_jvp(
         lambda model_, t_, y_, actuation_args_, capabilities_: (
             _assemble_forward_dynamics(
