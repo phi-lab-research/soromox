@@ -6,10 +6,10 @@ import pytest
 from numpy.testing import assert_allclose
 
 from soromox.utils.joint_motion_subspace import (
-    joint_dSdq_qd,
-    joint_dSTF_dq,
-    joint_dSTF_dq_direction,
     joint_motion_subspace_with_derivatives,
+    joint_twist_configuration_jacobian,
+    joint_wrench_projection_jacobian,
+    joint_wrench_projection_jvp,
 )
 from soromox.utils.lie_algebra import se3
 
@@ -79,7 +79,7 @@ def test_joint_motion_subspace_derivatives_match_autodiff(
     assert_allclose(dS_qdd_dq, expected_dS_qdd_dq, rtol=1.0e-8, atol=1.0e-10)
     assert_allclose(dSd_qd_dq, expected_dSd_qd_dq, rtol=1.0e-8, atol=1.0e-10)
     assert_allclose(
-        joint_dSdq_qd(
+        joint_twist_configuration_jacobian(
             interval_length,
             strain_basis,
             reference_strain,
@@ -92,7 +92,7 @@ def test_joint_motion_subspace_derivatives_match_autodiff(
         atol=1.0e-10,
     )
     assert_allclose(
-        joint_dSTF_dq(
+        joint_wrench_projection_jacobian(
             interval_length,
             strain_basis,
             reference_strain,
@@ -105,7 +105,7 @@ def test_joint_motion_subspace_derivatives_match_autodiff(
         atol=1.0e-10,
     )
     assert_allclose(
-        joint_dSTF_dq_direction(
+        joint_wrench_projection_jvp(
             interval_length,
             strain_basis,
             reference_strain,

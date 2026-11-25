@@ -2244,6 +2244,19 @@ class SoftRobot(DynamicalSystem):
         """
         return self.gravitational_force(q) + self.elastic_force(q)
 
+    def passive_force(self, q: Array, qd: Array) -> Array:
+        """Return elastic and damping effort, including installed passive elements.
+
+        Args:
+            q: Configuration, shape ``(num_coordinates,)``.
+            qd: Generalized velocity, shape ``(num_velocities,)``.
+
+        Returns:
+            Required passive effort, shape ``(num_velocities,)``, in
+            ``M @ qdd + Cqd + G + passive_force = applied effort``.
+        """
+        return self.elastic_force(q) + self.damping_matrix(q) @ qd
+
     def _gravitational_force(self, q: Array) -> Array:
         """
         Protected gravitational-force hook.
@@ -2994,19 +3007,6 @@ class SoftRobot(DynamicalSystem):
             return jnp.concatenate([qdot, qdd])
         auxiliary_dot = jnp.zeros_like(auxiliary_state)
         return jnp.concatenate([qdot, qdd, auxiliary_dot])
-
-    def passive_force(self, q: Array, qd: Array) -> Array:
-        """Return elastic and damping effort, including installed passive elements.
-
-        Args:
-            q: Configuration, shape ``(num_coordinates,)``.
-            qd: Generalized velocity, shape ``(num_velocities,)``.
-
-        Returns:
-            Required passive effort, shape ``(num_velocities,)``, in
-            ``M @ qdd + Cqd + G + passive_force = applied effort``.
-        """
-        return self.elastic_force(q) + self.damping_matrix(q) @ qd
 
     def _actuation_inputs(self, args: tuple | None, dtype) -> tuple[Array, Array]:
         """Normalize optional controls and external generalized effort.

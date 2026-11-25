@@ -6,9 +6,8 @@ Soromox ships development benchmarking CLIs under `tools/benchmarks`:
   dynamics, etc.) to track JIT compile and steady-state execution costs.
 - `benchmark_model_based_control.py` profiles the default model-based controller
   and controller-facing transformed-dynamics paths for PCS and GVS.
-- `benchmark_derivative_paths.py` compares direct analytical derivative hooks,
-  protected autograd fallbacks, and public APIs with custom JVPs enabled or disabled
-  for PlanarPCS, PCS, and GVS systems.
+- `benchmark_derivatives.py` compares autodiff and optional analytical rules for
+  kinematics, dynamics, and energy across all soft-robot system families.
 
 The benchmarks reported in the paper are maintained in
 [soromox-paper-experiments](https://github.com/phi-lab-research/soromox-paper-experiments):
@@ -131,28 +130,41 @@ Use `--methods` to select individual controller paths and `--csv` for a
 tabular export. Each row reports derived compile time and synchronized warm
 execution time for the default implementation on that revision.
 
-## Benchmarking derivative paths
+## Benchmarking derivatives
 
-Use `benchmark_derivative_paths.py` when you want a direct runtime comparison
-between direct analytical derivative implementations, protected autograd paths,
-and public APIs with custom JVPs enabled or disabled. The benchmark covers
-kinematic derivatives, Jacobian derivatives, and gradients of gravitational,
-elastic, potential, kinetic, and total energy.
+`benchmark_derivatives.py` compares the same public operation in default autodiff
+and analytical mode. Analytical mode enables optional custom rules and their AD
+fallbacks. The execution backend is JAX in both modes.
 
 ```bash
-python tools/benchmarks/benchmark_derivative_paths.py \
-  --systems planar_pcs pcs gvs \
-  --segment-counts 1 2 4 8 16 32 \
-  --execution-repeats 3 \
-  --csv benchmarks/derivative-paths.csv \
-  --json benchmarks/derivative-paths.json \
-  --markdown-summary benchmarks/derivative-paths.md
+python tools/benchmarks/benchmark_derivatives.py \
+  --device cpu --systems pendulum planar_pcs pcs gvs \
+  --segment-counts 1 4 --gauss-points 5 \
+  --queries pose_q forward_dynamics_state total_energy_state \
+  --representations jvp vjp jacfwd jacrev \
+  --execution-repeats 10 --csv /tmp/derivatives.csv --json /tmp/derivatives.json
 ```
 
-Each row reports one `case`/`strategy` pair, including compile time, warm
-execution time, ratios to the direct analytical and protected-autograd references,
-and `max_abs_diff` / `max_rel_diff` sanity checks. The Markdown summary groups the
-main speedup ratios by system and case.
+- `--systems all` covers Pendulum, ArticulatedSoftRobot, McKibbenActuatedUMArm,
+  PlanarPCS, PlanarHSA, PCS, ISupport, GVS, and Helicoidal. PlanarHSA and UMArm
+  use the bundled parameter assets at their fixed sizes, once per sweep.
+- `--queries all` covers pose and geometric-Jacobian derivatives, dynamics terms,
+  forward and inverse dynamics, all five energies, and short Euler rollouts.
+  Query names specify the differentiated input, such as `pose_s`,
+  `forward_dynamics_control`, or `inverse_dynamics_acceleration`.
+- `--representations` selects JVPs, VJPs, or full forward/reverse Jacobians.
+- `--device cpu` or `--device gpu` places model data and compiled work on that
+  device. An unavailable device raises an error.
+- Compilation is timed separately. Runtime is the median of synchronized calls
+  after warmup. Every comparison checks finite outputs and numerical agreement;
+  `--tolerance` controls the maximum scale-normalized error (default `1e-5`).
+
+CSV/JSON rows include model size, query, representation, mode, compilation/runtime,
+compiler temporary bytes, correctness differences, and environment provenance.
+Speedup is autodiff runtime divided by the selected mode's runtime.
+
+The tool consolidates the former `benchmark_derivative_paths.py` and
+`pcs_custom_jvp_speed_test.py` scripts. Use `--help` for the complete query list.
 
 ## Benchmarking parallel rollouts
 

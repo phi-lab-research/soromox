@@ -50,25 +50,6 @@ replacement = pcs.params.link.replace(density=1.05 * pcs.params.link.density)
 pcs = pcs.with_params(pcs.params.replace(link=replacement))
 ```
 
-## Dynamics derivatives
-
-See the [Differentiation guide](../../../user-guide/differentiation.md) for JAX
-examples, CPU/GPU recommendations, and the analytical derivative support table.
-
-`inverse_dynamics` returns `M @ qdd + Cqd + G + elastic + damping @ qd`, including
-installed passive elements. External applied forces must be subtracted from
-that effort. Converting the remaining generalized effort to actuator controls
-is a separate problem, particularly for an underactuated robot.
-
-`inverse_dynamics` and `passive_force` are defined on `SoftRobot` and are shared
-by PCS, planar PCS, and GVS. The PCS inertial-only recurrences are private
-implementation details. Migrate calls to the former `inverse_dynamics_derivatives`,
-`inverse_dynamics_backward_pass`, or `inverse_dynamics_state_pushforward` helpers
-to JAX transformations of `inverse_dynamics` for complete required-effort
-derivatives. These include passive-force derivatives. For inertial effort alone,
-subtract `pcs.passive_force(q, qd)` from `pcs.inverse_dynamics(q, qd, qdd)`
-before applying the JAX transformation.
-
 ## API Reference
 
 ::: soromox.systems.pcs.pcs

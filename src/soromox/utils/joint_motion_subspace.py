@@ -1,7 +1,7 @@
 __all__ = [
-    "joint_dSTF_dq",
-    "joint_dSTF_dq_direction",
-    "joint_dSdq_qd",
+    "joint_wrench_projection_jacobian",
+    "joint_wrench_projection_jvp",
+    "joint_twist_configuration_jacobian",
     "joint_motion_subspace_with_derivatives",
 ]
 
@@ -378,9 +378,9 @@ def joint_motion_subspace_with_derivatives(
     return (g, S, Sd, dSdq_qd, dSdq_qdd, dSddq_qd)
 
 
-def joint_dSdq_qd(H, B_xi, xi_ref, q, qd, eps) -> Array:
+def joint_twist_configuration_jacobian(H, B_xi, xi_ref, q, qd, eps) -> Array:
     """
-    Compute only dS/dq contracted with qd.
+    Compute the configuration Jacobian of the joint twist ``S(q) @ qd``.
 
     Args:
         H: Scalar interval length.
@@ -504,11 +504,12 @@ def joint_dSdq_qd(H, B_xi, xi_ref, q, qd, eps) -> Array:
     )
 
 
-def joint_dSTF_dq(H, B_xi, xi_ref, q, wrench, eps) -> Array:
+def joint_wrench_projection_jacobian(H, B_xi, xi_ref, q, wrench, eps) -> Array:
     """Compute ``d(S.T @ wrench) / dq`` without a rank-three ``dS/dq``.
 
-    The result is equivalent to evaluating :func:`joint_dSdq_qd` along every
-    generalized-coordinate basis direction and contracting each result with
+    The result is equivalent to evaluating
+    :func:`joint_twist_configuration_jacobian` for each velocity basis vector
+    and contracting each result with
     ``wrench``. Coadjoint actions perform the wrench contraction before the
     strain-basis products, avoiding the intermediate array with shape
     ``(num_dofs, 6, num_dofs)``.
@@ -623,7 +624,7 @@ def joint_dSTF_dq(H, B_xi, xi_ref, q, wrench, eps) -> Array:
     )
 
 
-def joint_dSTF_dq_direction(
+def joint_wrench_projection_jvp(
     H,
     B_xi,
     xi_ref,
@@ -634,7 +635,7 @@ def joint_dSTF_dq_direction(
 ) -> Array:
     """Apply ``d(S.T @ wrench) / dq`` to one or more directions.
 
-    This is the directional counterpart of :func:`joint_dSTF_dq`. It
+    This is the directional counterpart of :func:`joint_wrench_projection_jacobian`. It
     contracts the configuration directions inside each analytical term and
     therefore never materializes the square generalized-coordinate Jacobian.
 

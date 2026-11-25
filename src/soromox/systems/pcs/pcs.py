@@ -64,8 +64,8 @@ from soromox.utils.integration import (
     scale_interior_gaussian_quadrature,
 )
 from soromox.utils.joint_motion_subspace import (
-    joint_dSTF_dq,
     joint_motion_subspace_with_derivatives,
+    joint_wrench_projection_jacobian,
 )
 from soromox.utils.lie_algebra import se3, so3
 from soromox.utils.lie_algebra.constant_strain import se3 as constant_strain_se3
@@ -5947,7 +5947,7 @@ class PCS(SoftRobot):
             xi_ref_i = xi_ref_segments[segment_idx]
             H_i = H_steps[step_idx]
 
-            dSTF_res_dq = joint_dSTF_dq(
+            dSTF_res_dq = joint_wrench_projection_jacobian(
                 H_i,
                 B_xi_i,
                 xi_ref_i,

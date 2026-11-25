@@ -30,6 +30,7 @@ from soromox.execution.types import (
     KinematicsOperation,
     KinematicsResult,
 )
+from soromox.systems import _energy
 
 BatchExecutor = Callable[[DynamicsModel, Array, Array], DynamicsTerms]
 DynamicsActuationBatchExecutor = Callable[
@@ -765,8 +766,6 @@ def _energy_primal(model, q, velocity, kind):
     Returns:
         Scalar energy.
     """
-    from soromox.systems import _energy
-
     return _energy.evaluate(model, q, velocity, kind)
 
 

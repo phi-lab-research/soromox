@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import pcs_derivative_cases as cases
 import pytest
 from numpy.testing import assert_allclose
 
 from soromox.autodiff import custom_jvp_mode
 from soromox.systems import PCS
-from tools.benchmarks import pcs_custom_jvp_speed_test as benchmark
 
 jax.config.update("jax_enable_x64", True)
 
@@ -26,44 +26,29 @@ def _assert_trees_allclose(reference, candidate) -> None:
 
 
 def _build_workload(model: PCS, workload: str, *, use_custom_jvp: bool):
-    benchmark_inputs = benchmark.build_inputs(model)
-    workload_fn = benchmark.build_workload(
+    inputs = cases.build_inputs(model)
+    workload_fn = cases.build_workload(
         model,
         workload,
-        benchmark_inputs.y_direction,
-        benchmark_inputs.u_direction,
-        benchmark_inputs.system_parameter_direction,
+        inputs.y_direction,
+        inputs.u_direction,
+        inputs.system_parameter_direction,
         rollout_steps=3,
         rollout_dt=1.0e-4,
         use_custom_jvp=use_custom_jvp,
     )
     args = (
-        benchmark_inputs.y,
-        benchmark_inputs.u,
-        benchmark_inputs.tau_ext,
-        benchmark_inputs.system_parameters,
+        inputs.y,
+        inputs.u,
+        inputs.tau_ext,
+        inputs.system_parameters,
     )
-    return benchmark_inputs, workload_fn, args
+    return inputs, workload_fn, args
 
 
-def test_benchmark_defaults_cover_standard_quadrature_and_larger_models() -> None:
-    args = benchmark.parse_args([])
-
-    assert args.gauss_points == 5
-    assert args.segment_counts == [1, 2, 4, 8, 16, 32]
-    assert args.workloads == [
-        "state_jvp",
-        "state_jacobian_matvec",
-        "state_jacobian",
-    ]
-    assert args.rollout_steps == 8
-    assert args.rollout_dt == 1.0e-4
-    assert args.calls_per_sample == 1
-
-
-def test_benchmark_custom_jvp_matches_direct_jax_autodiff() -> None:
-    """The timed baseline must bypass the mutable custom-JVP dispatch toggle."""
-    model = benchmark.build_model("threadlike", num_segments=2, gauss_points=5)
+def test_full_dynamics_jacobians_match_direct_autodiff() -> None:
+    """The reference bypasses the optional derivative dispatch."""
+    model = cases.build_model("threadlike", num_segments=2, gauss_points=5)
     _, reference_fn, inputs = _build_workload(
         model, "all_jacobians", use_custom_jvp=False
     )
@@ -79,11 +64,11 @@ def test_benchmark_custom_jvp_matches_direct_jax_autodiff() -> None:
 @pytest.mark.usefixtures("analytical_derivatives")
 def test_custom_jvp_input_only_tangent_matches_direct_jax_autodiff() -> None:
     """Cover the custom rule's no-state-tangent inertia-matrix branch."""
-    model = benchmark.build_model("threadlike", num_segments=2, gauss_points=5)
-    benchmark_inputs = benchmark.build_inputs(model)
-    y = benchmark_inputs.y
-    u = benchmark_inputs.u
-    tau_ext = benchmark_inputs.tau_ext
+    model = cases.build_model("threadlike", num_segments=2, gauss_points=5)
+    inputs = cases.build_inputs(model)
+    y = inputs.y
+    u = inputs.u
+    tau_ext = inputs.tau_ext
     t = jnp.array(0.0)
 
     reference = jax.jacfwd(
@@ -104,10 +89,10 @@ def test_custom_jvp_input_only_tangent_matches_direct_jax_autodiff() -> None:
 def test_fused_dynamics_state_pushforward_matches_direct_jax_autodiff(
     setup: str,
 ) -> None:
-    model = benchmark.build_model(setup, num_segments=2, gauss_points=5)
-    benchmark_inputs = benchmark.build_inputs(model)
-    q, qd = jnp.split(benchmark_inputs.y, 2)
-    q_direction, qd_direction = jnp.split(benchmark_inputs.y_direction, 2)
+    model = cases.build_model(setup, num_segments=2, gauss_points=5)
+    inputs = cases.build_inputs(model)
+    q, qd = jnp.split(inputs.y, 2)
+    q_direction, qd_direction = jnp.split(inputs.y_direction, 2)
 
     expected_primal, expected_direction = jax.jvp(
         model.dynamics_terms,
@@ -133,7 +118,7 @@ def test_directional_jvp_matches_full_analytical_jacobian_matvec(
     num_segments: int,
 ) -> None:
     """Cover short and scan-based analytical state-JVP recurrences."""
-    model = benchmark.build_model(
+    model = cases.build_model(
         "threadlike",
         num_segments=num_segments,
         gauss_points=5,
@@ -165,7 +150,7 @@ def test_directional_jvp_matches_full_analytical_jacobian_matvec(
 @pytest.mark.usefixtures("analytical_derivatives")
 def test_large_dense_directional_jvp_matches_direct_jax_autodiff() -> None:
     """Cover the contracted inverse-dynamics route above the fused cutoff."""
-    model = benchmark.build_model("full", num_segments=16, gauss_points=5)
+    model = cases.build_model("full", num_segments=16, gauss_points=5)
     _, reference_fn, inputs = _build_workload(
         model,
         "state_jvp",
@@ -194,8 +179,8 @@ def test_large_dense_directional_jvp_matches_direct_jax_autodiff() -> None:
 def test_custom_jvp_state_tangent_accepts_optional_inputs(
     actuation_args: tuple | None,
 ) -> None:
-    model = benchmark.build_model("axial", num_segments=1, gauss_points=5)
-    y = benchmark.build_inputs(model).y
+    model = cases.build_model("axial", num_segments=1, gauss_points=5)
+    y = cases.build_inputs(model).y
     t = jnp.array(0.0)
 
     reference = jax.jacfwd(
@@ -225,7 +210,7 @@ def test_custom_jvp_state_tangent_accepts_optional_inputs(
 )
 @pytest.mark.usefixtures("analytical_derivatives")
 def test_rollout_derivative_workloads_match_direct_jax_autodiff(workload: str) -> None:
-    model = benchmark.build_model("axial", num_segments=1, gauss_points=5)
+    model = cases.build_model("axial", num_segments=1, gauss_points=5)
     _, reference_fn, inputs = _build_workload(
         model,
         workload,
@@ -245,32 +230,10 @@ def test_rollout_derivative_workloads_match_direct_jax_autodiff(workload: str) -
     assert jnp.linalg.norm(derivative) > 0.0
 
 
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        ("--rollout-steps", "0"),
-        ("--rollout-dt", "0"),
-        ("--calls-per-sample", "0"),
-    ],
-)
-def test_invalid_rollout_options_are_rejected(option: str, value: str) -> None:
-    with pytest.raises(SystemExit):
-        benchmark.parse_args([option, value])
-
-
-def test_benchmark_rejects_nonfinite_results():
-    for value in (jnp.nan, jnp.inf):
-        absolute, relative = benchmark.difference(
-            jnp.array([value]), jnp.array([value])
-        )
-        assert absolute == float("inf")
-        assert relative == float("inf")
-
-
 @pytest.fixture
-def benchmark_case():
-    model = benchmark.build_model("threadlike", 1, 3)
-    return model, benchmark.build_inputs(model)
+def derivative_case():
+    model = cases.build_model("threadlike", 1, 3)
+    return model, cases.build_inputs(model)
 
 
 @pytest.mark.parametrize(
@@ -291,12 +254,12 @@ def benchmark_case():
     ],
 )
 @pytest.mark.usefixtures("analytical_derivatives")
-def test_composed_workloads_match_reference(benchmark_case, workload):
-    model, inputs = benchmark_case
+def test_composed_workloads_match_reference(derivative_case, workload):
+    model, inputs = derivative_case
 
     def make(enabled):
         return jax.jit(
-            benchmark.build_workload(
+            cases.build_workload(
                 model,
                 workload,
                 inputs.y_direction,
@@ -318,9 +281,11 @@ def test_composed_workloads_match_reference(benchmark_case, workload):
 )
 @pytest.mark.parametrize("workload", ["mixed_jvp", "state_directions"])
 @pytest.mark.usefixtures("analytical_derivatives")
-def test_compiled_primal_and_tangents_share_one_factorization(benchmark_case, workload):
-    model, inputs = benchmark_case
-    fn = benchmark.build_workload(
+def test_compiled_primal_and_tangents_share_one_factorization(
+    derivative_case, workload
+):
+    model, inputs = derivative_case
+    fn = cases.build_workload(
         model,
         workload,
         inputs.y_direction,
