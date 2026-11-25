@@ -14,17 +14,48 @@ Describe the delta from the last release, not intermediate development changes.
 
 ### Added
 
+- Analytical PCS dynamics-term and forward-dynamics state Jacobians and
+  directional derivatives, available through ordinary JAX transformations when
+  custom derivatives are enabled. Explicit helpers provide state and input
+  Jacobians for fixed-base PCS models.
+- `SoftRobot.inverse_dynamics(q, v, a)` for required generalized effort, including
+  elastic and damping forces, and `passive_force(q, v)` for their combined effort.
+
 ### Changed
 
+- Consolidated derivative benchmarking in `benchmark_derivatives.py`, covering
+  all soft-robot model families, kinematics, dynamics, and energies, with JVPs,
+  VJPs, full Jacobians, and CPU/GPU device selection.
+- Computed-torque and feedforward controllers use the shared inverse-dynamics
+  operation; operational-space impedance compensation uses `passive_force`.
+- Scalar geometric-Jacobian APIs share derivative routing. Custom energy rules
+  compose kinetic, gravitational, and elastic contributions; PCS gravitational
+  energy and GVS pose arc-length derivatives use autodiff.
+
 ### Performance
+
+- PCS dynamics derivatives reuse inertia factors and share evaluations across
+  active directions. Kinetic-energy values and velocity derivatives share the
+  efficient `inertia_matrix` computation for PCS, PlanarPCS, and GVS.
 
 ### Deprecated
 
 ### Breaking changes
 
+- Autodiff is now the default for ordinary JAX transformations of system methods
+  on CPU and GPU. Enable optional analytical rules with `custom_jvp_mode(True)`
+  or `set_custom_jvp_enabled(True)` before tracing. Existing compiled functions
+  retain their traced mode. See [Differentiation](../user-guide/differentiation.md).
+
 ### Fixed
 
+- Disabling custom derivatives also bypasses optional analytical kinematics rules
+  in shared execution adapters.
+
 ### Documentation
+
+- Added a differentiation guide with workload recommendations, analytical
+  support tables, and examples covering kinematics, dynamics, and energy.
 
 ### Contributors
 

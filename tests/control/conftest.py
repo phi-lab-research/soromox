@@ -56,6 +56,13 @@ class FakeDynamicsRobot(FakeRobot):
         self.dynamics_terms_calls += 1
         return self._M, self._C @ qd, self._G
 
+    def passive_force(self, q, qd):
+        return self.elastic_force(q) + self.damping_matrix(q) @ qd
+
+    def inverse_dynamics(self, q, qd, qdd):
+        mass, convective, gravity = self.dynamics_terms(q, qd)
+        return mass @ qdd + convective + gravity + self.passive_force(q, qd)
+
 
 def make_reference(x_des, xd_des, xdd_des=None):
     x_des = jnp.asarray(x_des, dtype=jnp.float64)

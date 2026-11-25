@@ -2,6 +2,8 @@
 
 See [Parameters, Updates, and Optimization](parameters-and-optimization.md)
 for complete construction, immutable update, JAX, and Optax examples.
+See [Differentiation](differentiation.md) for kinematics, dynamics, and energy
+derivative examples.
 
 This page provides a comprehensive overview of the example scripts included with SoRoMoX. Examples are organized by application area to help you find the right starting point for your use case.
 
@@ -12,7 +14,7 @@ This page provides a comprehensive overview of the example scripts included with
 
 ## Overview
 
-SoRoMoX examples are organized into two main categories:
+SoRoMoX examples are organized by topic:
 
 - **[Simulation Examples](#simulation-examples)** - Dynamic simulations of various robot systems
 - **[Control Examples](#control-examples)** - Control algorithms for different control spaces

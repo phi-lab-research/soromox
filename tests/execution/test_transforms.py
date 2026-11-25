@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import pytest
 from jax import Array
 from numpy.testing import assert_allclose
 
+from soromox import custom_jvp_mode
 from soromox.execution import (
     DynamicsTerms,
     ExecutionBackend,
     evaluate_forward_dynamics,
     make_dynamics_evaluator,
     make_kinematics_evaluators,
+)
+from soromox.execution.transforms import (
+    evaluate_forward_kinematics,
+    evaluate_inertial_jacobian,
 )
 
 jax.config.update("jax_enable_x64", True)
@@ -79,6 +83,9 @@ class _TransformProbe(eqx.Module):
 
         return jnp.zeros((q.size, q.size), dtype=q.dtype)
 
+    def passive_force(self, q: Array, qd: Array) -> Array:
+        return self.elastic_force(q) + self.damping_matrix(q) @ qd
+
     def actuation_force(
         self,
         q: Array,
@@ -114,16 +121,12 @@ class _KinematicsTransformProbe(eqx.Module):
 
         return self.offset + jnp.array([s + q[0], q[1], q[2]])
 
-    def _forward_kinematics_jvp(
-        self,
-        q: Array,
-        s: Array,
-        qd: Array | None,
-        sd: Array | None,
-        *,
-        model_tangent: Any = None,
-    ) -> tuple[Array, Array]:
+    def _analytical_forward_kinematics_jvp(
+        self, primals: tuple, tangents: tuple
+    ) -> tuple[Array, Array] | None:
         """Differentiate the probe's model and state inputs."""
+        _, q, s = primals
+        model_tangent, qd, sd = tangents
 
         qd = jnp.zeros_like(q) if qd is None else qd
         sd = jnp.zeros_like(s) if sd is None else sd
@@ -190,6 +193,7 @@ def test_dynamics_evaluator_uses_jax_for_forward_and_reverse_derivatives() -> No
     assert_allclose(actual_gradient, expected_gradient, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_kinematics_evaluator_preserves_model_tangent() -> None:
     """Differentiate model leaves through the accelerated pose adapter."""
 
@@ -271,3 +275,226 @@ def test_forward_dynamics_boundary_routes_derivatives_to_jax() -> None:
         lambda y_: jnp.sum(evaluate_forward_dynamics(model, time, y_, None, None))
     )(y)
     assert_allclose(actual_gradient, expected_gradient, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("adapter", ["jax", "accelerated_pose", "accelerated_pair"])
+@pytest.mark.parametrize("transform", ["jvp", "grad", "jacfwd", "jacrev"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_pose_derivative_mode_across_execution_boundaries(
+    adapter, transform, enabled, monkeypatch
+):
+    model = _KinematicsTransformProbe(offset=jnp.zeros(3))
+    q = jnp.array([0.1, -0.2, 0.3])
+    samples = jnp.array([0.2, 0.4])
+    calls = []
+    original = _KinematicsTransformProbe._analytical_forward_kinematics_jvp
+
+    def observed(self, *args, **kwargs):
+        assert enabled, "disabled analytical pose hook was called"
+        calls.append(True)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        _KinematicsTransformProbe, "_analytical_forward_kinematics_jvp", observed
+    )
+    monkeypatch.setattr(
+        _KinematicsTransformProbe,
+        "_absolute_inertial_jacobian",
+        lambda self, q, s: jnp.diag(q + s + self.offset),
+        raising=False,
+    )
+
+    def forbidden_primal(*args):
+        raise AssertionError("differentiation staged an accelerated primal")
+
+    if adapter == "jax":
+        evaluate = evaluate_forward_kinematics
+    else:
+        evaluate, _ = make_kinematics_evaluators(
+            forbidden_primal,
+            family_name="test",
+            operation="pose" if adapter == "accelerated_pose" else "pose_and_jacobian",
+        )
+
+    def reference(s):
+        pose = model._absolute_forward_kinematics(q, s)
+        if adapter == "accelerated_pair":
+            return pose, model._absolute_inertial_jacobian(q, s)
+        return pose
+
+    def differentiate(fn):
+        if transform == "jvp":
+            return lambda s: jax.jvp(fn, (s,), (jnp.ones_like(s),))
+        if transform == "grad":
+            return jax.grad(lambda s: sum(jnp.sum(x) for x in jax.tree.leaves(fn(s))))
+        return getattr(jax, transform)(fn)
+
+    with custom_jvp_mode(enabled):
+        actual = jax.jit(jax.vmap(differentiate(lambda s: evaluate(model, q, s))))(
+            samples
+        )
+    expected = jax.jit(jax.vmap(differentiate(reference)))(samples)
+    assert jax.tree.structure(actual) == jax.tree.structure(expected)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    assert bool(calls) == enabled
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("adapter", ["jax", "accelerated_jacobian", "accelerated_pair"])
+@pytest.mark.parametrize("transform", ["jvp", "grad", "jacfwd", "jacrev"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_scalar_inertial_jacobian_mode_across_execution_boundaries(
+    adapter, transform, enabled, monkeypatch
+):
+    model = _KinematicsTransformProbe(offset=jnp.zeros(3))
+    q, s = jnp.array([0.1, -0.2, 0.3]), jnp.array(0.2)
+    calls = []
+
+    def primal(self, q, s):
+        return jnp.diag(q**2 + s + self.offset)
+
+    def hook(self, primals, tangents):
+        assert enabled
+        calls.append(True)
+        return eqx.filter_jvp(primal, primals, tangents)
+
+    monkeypatch.setattr(
+        _KinematicsTransformProbe, "_absolute_inertial_jacobian", primal, raising=False
+    )
+    monkeypatch.setattr(
+        _KinematicsTransformProbe, "_analytical_jacobian_jvp", hook, raising=False
+    )
+
+    def forbidden_primal(*args):
+        raise AssertionError("derivative staged an accelerated primal")
+
+    if adapter == "jax":
+        evaluate = evaluate_inertial_jacobian
+    else:
+        evaluate, _ = make_kinematics_evaluators(
+            forbidden_primal,
+            family_name="test",
+            operation="pose_and_jacobian"
+            if adapter == "accelerated_pair"
+            else "jacobian",
+        )
+
+    def reference(q):
+        J = primal(model, q, s)
+        return (
+            (model._absolute_forward_kinematics(q, s), J)
+            if adapter == "accelerated_pair"
+            else J
+        )
+
+    def differentiate(fn):
+        if transform == "jvp":
+            return lambda q: jax.jvp(fn, (q,), (jnp.ones_like(q),))
+        if transform == "grad":
+            return jax.grad(lambda q: sum(jnp.sum(x) for x in jax.tree.leaves(fn(q))))
+        return getattr(jax, transform)(fn)
+
+    with custom_jvp_mode(enabled):
+        actual = jax.jit(differentiate(lambda q: evaluate(model, q, s)))(q)
+    expected = jax.jit(differentiate(reference))(q)
+    assert bool(calls) == enabled
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("transform", ["jvp", "grad"])
+@pytest.mark.parametrize(
+    "operation", ["jax_terms", "accelerated_terms", "forward", "inverse"]
+)
+def test_dynamics_boundaries_own_derivative_mode(
+    enabled, transform, operation, monkeypatch
+):
+    """Model hooks need no copy of the process-wide mode policy."""
+    from soromox.execution.transforms import (
+        _assemble_forward_dynamics,
+        evaluate_dynamics_terms,
+        evaluate_inverse_dynamics,
+    )
+
+    model = _TransformProbe(scale=jnp.array(2.0))
+    q = jnp.array([0.1, -0.2, 0.3])
+    v = jnp.array([-0.2, 0.3, 0.1])
+    point = jnp.concatenate((q, v)) if operation == "forward" else q
+    calls = []
+    if operation == "forward":
+
+        def raw(model, t, y, args):
+            return _assemble_forward_dynamics(
+                model, t, y, args, backend="jax", capabilities=None
+            )
+
+        def public(x):
+            return evaluate_forward_dynamics(model, 0.0, x, None, "jax")
+
+        def reference(x):
+            return raw(model, 0.0, x, None)
+
+        hook_name = "_analytical_forward_dynamics_jvp"
+    elif operation == "inverse":
+
+        def inverse(self, q, v, a):
+            mass, convective, gravity = self._assemble_dynamics_terms(q, v)
+            return mass @ a + convective + gravity
+
+        monkeypatch.setattr(
+            _TransformProbe, "_inverse_dynamics", inverse, raising=False
+        )
+        raw = inverse
+
+        def public(x):
+            return evaluate_inverse_dynamics(model, x, v, v)
+
+        def reference(x):
+            return raw(model, x, v, v)
+
+        hook_name = "_analytical_inverse_dynamics_jvp"
+    else:
+
+        def raw(model, q, v):
+            return model._assemble_dynamics_terms(q, v)
+
+        evaluator = evaluate_dynamics_terms
+        if operation == "accelerated_terms":
+
+            def forbidden_executor(*args):
+                raise AssertionError("derivative staged the accelerated primal")
+
+            evaluator = make_dynamics_evaluator(forbidden_executor, family_name="test")
+
+        def public(x):
+            return evaluator(model, x, v)
+
+        def reference(x):
+            return raw(model, x, v)
+
+        hook_name = "_analytical_dynamics_terms_jvp"
+
+    def hook(self, primals, tangents):
+        calls.append(True)
+        return eqx.filter_jvp(raw, primals, tangents)
+
+    monkeypatch.setattr(_TransformProbe, hook_name, hook, raising=False)
+
+    def differentiate(fn):
+        if transform == "jvp":
+            return jax.jit(lambda x: jax.jvp(fn, (x,), (jnp.ones_like(x),)))(point)
+        return jax.jit(
+            jax.grad(lambda x: sum(jnp.sum(a) for a in jax.tree.leaves(fn(x))))
+        )(point)
+
+    jax.clear_caches()
+    with custom_jvp_mode(enabled):
+        actual = differentiate(public)
+        expected = differentiate(reference)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-12, atol=1e-12)
+    assert bool(calls) is enabled
+    jax.clear_caches()

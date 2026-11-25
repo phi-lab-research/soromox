@@ -2741,19 +2741,9 @@ class PlanarPCS(SoftRobot):
         Returns:
             B (Array): Inertia matrix of shape (num_active_strains, num_active_strains).
         """
-        if self._has_custom_inertia:
-            return self._assemble_dynamics_terms(
-                q, jnp.zeros(self.num_velocities, dtype=q.dtype)
-            )[0]
-
-        if self.floating_base:
-            zeros = jnp.zeros((self.num_velocities,), dtype=q.dtype)
-            return self._assemble_dynamics_terms(q, zeros)[0]
-        B_full = self._inertia_full_matrix(q)
-
-        B = self.B_xi.T @ B_full @ self.B_xi
-
-        return B
+        return self._assemble_dynamics_terms(
+            q, jnp.zeros((self.num_velocities,), dtype=q.dtype)
+        )[0]
 
     @eqx.filter_jit
     def _coriolis_full_matrix(self, q: Array, qd: Array) -> Array:

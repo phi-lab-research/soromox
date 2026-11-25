@@ -416,4 +416,4 @@ Ready for something more advanced? Let's simulate a soft continuum robot:
     - **Numerical Precision**: Enable double precision with `jax.config.update("jax_enable_x64", True)`
     - **Unstable Simulations**: Use a smaller timestep and a higher order solver to prevent numerical instability and improve accuracy of the simulation.
     - **Slow Batched Simulations**: If batched simulations are slow, try using a smaller batch size and execute on a desktop-size GPU.
-    - **Automatic Differentiation**: Please use automatic differentiation with care as it can be very slow and memory-intensive - in particular, when differentiating through the simulation integration.
+    - **Automatic Differentiation**: See [Differentiation](differentiation.md) for derivative modes and gradients through integration.

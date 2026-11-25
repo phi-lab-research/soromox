@@ -301,33 +301,13 @@ def actuation_matrix(self, q: jax.Array) -> jax.Array:
     """
     ...
 
-def forward_dynamics(self, t, y, tau_ext, actuation_args):
-    """
-    State derivatives for simulation: yd = [qdot, vdot]
-
-    Implements the equation of motion for soft robots.
-    """
-    q, v, auxiliary = self.split_state(y)
-    u = actuation_args.get("u", jnp.zeros(self.num_actuators))
-
-    # Dynamic matrices
-    M = self.inertia_matrix(q)
-    C = self.coriolis_matrix(q, v)
-    D = self.damping_matrix(q)
-
-    # Forces
-    tau_el = self.elastic_force(q)
-    tau_g = self.gravitational_force(q)
-    A = self.actuation_matrix(q)
-    tau_act = A @ u
-
-    # Solve for acceleration: M qdd = tau_total
-    tau_total = tau_act + tau_ext - C @ v - D @ v - tau_el - tau_g
-    vdot = jnp.linalg.solve(M, tau_total)
-    qdot = self.configuration_derivative(q, v)
-    auxiliary_dot = jnp.zeros_like(auxiliary)
-
-    return jnp.concatenate([qdot, vdot, auxiliary_dot])
+def _assemble_dynamics_terms(self, q, v):
+    """Return the shared JAX equations for forward and inverse dynamics."""
+    return (
+        self.inertia_matrix(q),
+        self.coriolis_matrix(q, v) @ v,
+        self.gravitational_force(q),
+    )
 ```
 
 **Energy and control consistency:** `coriolis_matrix(q, qd)` must be consistent
@@ -338,6 +318,11 @@ the mechanical energy balance, passivity arguments, and model-based control. It
 also keeps derivative-based APIs consistent. If you override an optimized
 `dynamics_terms(q, qd)` method, its returned `Cqd` vector must equal the
 convective force `C(q, qd) @ qd` for this same convention.
+
+`passive_force(q, qd)` supplies the total elastic and damping effort to both
+forward and inverse dynamics. Override it when adding a combined passive law.
+Implement optimized JAX dynamics terms in `_assemble_dynamics_terms(q, qd)` so
+forward dynamics, inverse dynamics, and their derivatives share the same equations.
 
 #### 6. Implement Energy Methods (Optional but Recommended)
 
@@ -409,105 +394,46 @@ def total_energy(self, q: jax.Array, qd: jax.Array) -> jax.Array:
 
 #### 7. Autodiff and analytical custom JVPs
 
-JAX makes it natural for users to differentiate through model methods directly.
-Optimization, control, and sensitivity code can be written against the public
-SoRoMoX API:
+Autodiff is the package default. Analytical derivative hooks are optional
+optimizations selected only after an explicit opt-in before tracing.
 
-```python
-import jax
-import jax.numpy as jnp
+Public methods use shared transformation adapters in
+`execution/transforms.py`. These adapters select analytical model hooks or JAX
+AD of protected primal methods. Users keep calling ordinary JAX transformations;
+see the [Differentiation guide](../user-guide/differentiation.md) for examples,
+mode selection, and model support.
 
-# Energy gradients
-G = jax.grad(lambda q: robot.gravitational_energy(q))(q)
-K = jax.grad(lambda q: robot.elastic_energy(q))(q)
-dE_dq, dE_dqd = jax.grad(
-    lambda q, qd: robot.total_energy(q, qd),
-    argnums=(0, 1),
-)(q, qd)
+Keep three responsibilities separate:
 
-# Forward-kinematics directional derivatives
-pose, posed = jax.jvp(
-    lambda q: robot.forward_kinematics(q, s),
-    (q,),
-    (qd,),
-)
+- Public system methods forward to the shared execution adapters.
+- Protected model hooks provide primal equations and analytical recurrences.
+- Shared mathematical composition lives in `systems/_kinematics.py`,
+  `systems/_dynamics.py`, and `systems/_energy.py`.
 
-# Jacobian directional derivatives
-J, Jd = jax.jvp(
-    lambda q: robot.jacobian(q, s),
-    (q,),
-    (qd,),
-)
-```
+Every optional model action uses the same `(primals, tangents)` interface and
+returns either `(value, direction)` or `None` for autodiff. `SoftRobot` declares
+`_analytical_forward_kinematics_jvp`, `_analytical_jacobian_jvp`,
+`_analytical_dynamics_terms_jvp`, `_analytical_forward_dynamics_jvp`,
+`_analytical_inverse_dynamics_jvp`, and `_analytical_energy_jvp`.
+Models supply physical recurrences; shared modules compose active directions.
 
-This user-facing code is convenient, but plain automatic differentiation is not
-always the most efficient implementation. Many soft-robot quantities have
-closed-form derivatives:
+Energy methods share one adapter, `evaluate_energy`, with a static energy kind.
+Its optional `_analytical_energy_jvp` hook composes force and inertia actions.
+Returning `None` selects one AD pass over all active inputs. This is also the
+fallback convention used by the dynamics adapters. The base energy hook uses
+this fallback for floating bases and requests involving model parameters.
 
-- `grad(gravitational_energy)` is the gravitational generalized force.
-- `grad(elastic_energy)` is the elastic generalized force.
-- A `q`-directional JVP of `kinetic_energy(q, qd)` uses the same
-  Christoffel/energy-consistent convective force convention as the model
-  dynamics.
-- A `q`-directional JVP of `jacobian(q, s)` is the Jacobian time derivative
-  `dJ/dq @ qd`.
-- An `s`-directional JVP is an arc-length derivative along the backbone.
+Kinematics adapters share pose derivative selection across the ordinary JAX
+and accelerated execution paths. Pose, geometric Jacobian, energy, and dynamics
+adapters check `custom_jvp_enabled()` before invoking optional analytical hooks.
+Model hooks only decide whether their formulas support the requested physics.
+Explicit derivative methods retain their specified algorithms.
 
-SoRoMoX uses JAX `custom_jvp` rules on the public `SoftRobot` methods to keep the
-user-facing code simple while selecting analytical derivatives internally when a
-system provides them. In other words, users can still call `jax.grad`,
-`jax.jvp`, `jax.jacfwd`, or `jax.jacrev` on the public methods; the library
-routes the derivative through the best available implementation.
-
-The base-class pattern looks like this for `jacobian`. The public method stays
-ordinary Python, while the static custom-JVP entry point delegates primal
-evaluation and tangent evaluation to protected hooks:
-
-```python
-import equinox as eqx
-import jax
-import jax.numpy as jnp
-
-from soromox.autodiff import custom_jvp_enabled
-
-
-class SoftRobot:
-    def jacobian(self, q, s):
-        if custom_jvp_enabled():
-            return SoftRobot._jacobian_custom_jvp(self, q, s)
-        return self._jacobian(q, s)
-
-    @eqx.filter_custom_jvp
-    @staticmethod
-    def _jacobian_custom_jvp(robot, q, s):
-        return robot._jacobian(q, s)
-
-    @_jacobian_custom_jvp.def_jvp
-    def _jacobian_custom_jvp_jvp(primals, tangents):
-        robot, q, s = primals
-        _, qd, sd = tangents
-
-        if qd is None and sd is None:
-            J = robot._jacobian(q, s)
-            return J, jnp.zeros_like(J)
-
-        if qd is None:
-            J, Js = robot.jacobian_and_arc_length_derivative(q, s)
-            return J, Js * sd
-
-        if sd is None:
-            return robot.jacobian_and_time_derivative(q, qd, s)
-
-        return jax.jvp(
-            lambda q_, s_: robot._jacobian(q_, s_),
-            (q, s),
-            (qd, sd),
-        )
-```
-
-The first two derivative branches use analytical hooks. The final mixed branch
-falls back to autodiff through `_jacobian`, because that path has not justified a
-separate analytical custom-JVP rule in benchmarks.
+Treat filtered `None` tangents as inactive inputs. Skip their contributions,
+share primal work across active directions, and keep the tangent expression
+linear. When a request needs AD for several inputs, differentiate them jointly
+so their common work can be shared. Do not add a custom rule for each user loss,
+integration method, or combination of differentiation arguments.
 
 As an implementer, define analytical protected hooks rather than writing custom
 JVP rules in each system class. For example, a spatial PCS-like system can
@@ -558,8 +484,8 @@ def _forward_kinematics_arc_length_derivative(self, q, s):
     return jnp.concatenate([jnp.atleast_1d(kappa_i), R @ sigma_i])
 ```
 
-For the Jacobian custom JVP, the dispatch is split by tangent type. A
-configuration-only tangent uses `jacobian_and_time_derivative(q, qd, s)`. An
+When custom derivatives are enabled, the Jacobian dispatch is split by tangent
+type. A configuration-only tangent uses `jacobian_and_time_derivative(q, qd, s)`. An
 arc-length-only tangent uses `jacobian_and_arc_length_derivative(q, s)`. A mixed
 `q` and `s` tangent falls back to JAX autodiff through `_jacobian`; higher-order
 benchmarks showed that maintaining a fused mixed custom-JVP path was not worth
@@ -569,9 +495,19 @@ For forward kinematics, configuration and mixed tangents use JAX autodiff
 through `_forward_kinematics`, while arc-length-only tangents use
 `forward_kinematics_and_arc_length_derivative(q, s)` so systems can still share
 the primal pose computation with an analytical `d pose / ds`.
+The `_forward_kinematics_arc_length_jvp` hook selects this action; GVS overrides
+it to use AD of the scalar pose recurrence. Explicit analytical arc-length
+helpers keep their specified algorithms.
+
+Kinetic energy and its velocity action both call `inertia_matrix(q)`. Continuum
+models select this matrix from their protected dynamics assembly with zero
+velocity so unused force outputs can be pruned. The same matrix call in primal and tangent code lets compilation share the assembly. Gravity energy has its own
+`_gravitational_energy_q_jvp_tangent` hook: PCS uses AD of the scalar potential.
+Potential and total energy compose that action with the elastic and kinetic
+contributions.
 
 When implementing a new system, prefer overriding the protected hooks below and
-let the public methods on `SoftRobot` provide the custom-JVP wrappers:
+let the shared execution adapters provide the custom-JVP wrappers:
 
 | Hook | Purpose |
 |------|---------|
@@ -593,16 +529,6 @@ Avoid exact-class checks such as `type(self) is PCS` in these hooks. Subclasses
 often share the same kinematics and should inherit the same protected-hook
 behavior. If a subclass changes the kinematic model, override the affected hook
 in that subclass.
-
-Custom JVPs are enabled by default. They can be disabled globally before tracing
-JAX code:
-
-```python
-from soromox import custom_jvp_mode
-
-with custom_jvp_mode(False):
-    J, Jd = jax.jvp(lambda q: robot.jacobian(q, s), (q,), (qd,))
-```
 
 #### 8. Register as JAX PyTree (if using Equinox)
 

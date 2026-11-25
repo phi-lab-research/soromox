@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
+from soromox.autodiff import custom_jvp_enabled
 from soromox.execution.types import (
     AbscissaBatchedKinematicsEvaluator,
     ActuationForceEvaluator,
@@ -29,6 +30,7 @@ from soromox.execution.types import (
     KinematicsOperation,
     KinematicsResult,
 )
+from soromox.systems import _energy
 
 BatchExecutor = Callable[[DynamicsModel, Array, Array], DynamicsTerms]
 DynamicsActuationBatchExecutor = Callable[
@@ -184,11 +186,68 @@ def _evaluate_forward_kinematics_jvp(
     primals: tuple[KinematicsModel, Array, Array],
     tangents: tuple[Any, Array | None, Array | None],
 ) -> tuple[Array, Array]:
-    """Route pose derivatives through the model's established JAX rule."""
+    """Select the configured pose derivative action.
 
-    model, q, s = primals
-    model_tangent, qd, sd = tangents
-    return model._forward_kinematics_jvp(q, s, qd, sd, model_tangent=model_tangent)
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Pose and its directional derivative.
+    """
+
+    return _pose_jvp(primals, tangents)
+
+
+@eqx.filter_custom_jvp
+def evaluate_pose(model, q, s):
+    """Evaluate the model pose for the supplied configuration.
+
+    Args:
+        model: Model implementing the kinematics interface.
+        q: Configuration, shape ``(num_coordinates,)``.
+        s: Scalar backbone coordinate.
+
+    Returns:
+        Pose in the model's stored representation.
+    """
+    return model._absolute_forward_kinematics(q, s)
+
+
+@evaluate_pose.def_jvp
+def _evaluate_pose_jvp(primals, tangents):
+    """Select the configured pose derivative action.
+
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Pose and its directional derivative.
+    """
+    return _pose_jvp(primals, tangents)
+
+
+def _pose_jvp(primals, tangents):
+    """Select the configured pose derivative action.
+
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Pose and its directional derivative.
+    """
+    hook = getattr(primals[0], "_analytical_forward_kinematics_jvp", None)
+    if custom_jvp_enabled() and hook is not None:
+        result = hook(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(
+        lambda model, q, s: model._absolute_forward_kinematics(q, s),
+        primals,
+        tangents,
+    )
 
 
 @jax.custom_batching.custom_vmap
@@ -245,12 +304,33 @@ def _evaluate_inertial_jacobian_jvp(
     primals: tuple[KinematicsModel, Array, Array],
     tangents: tuple[Any, Array | None, Array | None],
 ) -> tuple[Array, Array]:
-    """Differentiate the model's established scalar JAX Jacobian."""
+    """Select the configured geometric-Jacobian derivative action.
 
-    return eqx.filter_jvp(
-        lambda model, q, s: model._absolute_inertial_jacobian(q, s),
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Geometric Jacobian and its directional derivative.
+    """
+
+    return _inertial_jacobian_jvp(primals, tangents)
+
+
+def _inertial_jacobian_jvp(primals, tangents):
+    """Select the configured geometric-Jacobian derivative action.
+
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Geometric Jacobian and its directional derivative.
+    """
+    return _jacobian_jvp(
         primals,
         tangents,
+        lambda model, q, s: model._absolute_inertial_jacobian(q, s),
     )
 
 
@@ -260,7 +340,16 @@ def make_kinematics_evaluators(
     family_name: str,
     operation: KinematicsOperation,
 ) -> tuple[KinematicsEvaluator, AbscissaBatchedKinematicsEvaluator]:
-    """Adapt a canonical ``(E,D)``/``(E,N)`` executor to public JAX semantics."""
+    """Adapt an accelerated executor to scalar and spatial-batch transformations.
+
+    Args:
+        execute_batch: Executor accepting environment-by-coordinate and environment-by-sample arrays.
+        family_name: Model family used in error messages.
+        operation: Requested output: pose, jacobian, or both.
+
+    Returns:
+        Scalar and abscissa-batched evaluators with shared derivative routing.
+    """
 
     def slice_environment_sample(result: KinematicsResult) -> KinematicsResult:
         return jax.tree.map(lambda value: value[0, 0], result)
@@ -309,24 +398,12 @@ def make_kinematics_evaluators(
         primals: tuple[KinematicsModel, Array, Array],
         tangents: tuple[Any, Array | None, Array | None],
     ) -> tuple[KinematicsResult, KinematicsResult]:
-        model, q, s = primals
-        model_tangent, qd, sd = tangents
         if operation == "jacobian":
-            return eqx.filter_jvp(
-                lambda model_, q_, s_: model_._absolute_inertial_jacobian(q_, s_),
-                primals,
-                tangents,
-            )
-        pose, pose_tangent = model._forward_kinematics_jvp(
-            q, s, qd, sd, model_tangent=model_tangent
-        )
+            return _inertial_jacobian_jvp(primals, tangents)
+        pose, pose_tangent = _pose_jvp(primals, tangents)
         if operation == "pose":
             return pose, pose_tangent
-        jacobian, jacobian_tangent = eqx.filter_jvp(
-            lambda model_, q_, s_: model_._absolute_inertial_jacobian(q_, s_),
-            primals,
-            tangents,
-        )
+        jacobian, jacobian_tangent = _inertial_jacobian_jvp(primals, tangents)
         return (pose, jacobian), (pose_tangent, jacobian_tangent)
 
     @jax.custom_batching.custom_vmap
@@ -385,6 +462,47 @@ def make_kinematics_evaluators(
     return scalar_evaluator, abscissa_batched_evaluator
 
 
+def _dynamics_terms_jvp(primals, tangents):
+    """Select an optional dynamics-term action or joint autodiff.
+
+    Args:
+        primals: Model, configuration, and generalized velocity.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Primal ``(M, Cqd, G)`` and their directional derivatives.
+    """
+    model, _, _ = primals
+    hook = getattr(model, "_analytical_dynamics_terms_jvp", None)
+    if custom_jvp_enabled() and hook is not None:
+        result = hook(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(
+        lambda model, q, qd: model._assemble_dynamics_terms(q, qd),
+        primals,
+        tangents,
+    )
+
+
+@eqx.filter_custom_jvp
+def evaluate_dynamics_terms(model, q, qd):
+    """Evaluate differentiable dynamics terms through the shared boundary.
+
+    Args:
+        model: Model implementing protected term assembly.
+        q: Configuration, shape ``(num_coordinates,)``.
+        qd: Generalized velocity, shape ``(num_velocities,)``.
+
+    Returns:
+        Inertia, convective force, and gravitational effort.
+    """
+    return model._assemble_dynamics_terms(q, qd)
+
+
+evaluate_dynamics_terms.def_jvp(_dynamics_terms_jvp)
+
+
 def make_dynamics_evaluator(
     execute_batch: BatchExecutor, *, family_name: str
 ) -> DynamicsEvaluator:
@@ -394,9 +512,9 @@ def make_dynamics_evaluator(
     does not replicate batch-one executor launches: the custom batching rule
     moves the mapped axis into a single call to ``execute_batch``. Applying
     forward- or reverse-mode differentiation replaces the forward-only executor
-    with ``model._assemble_dynamics_terms`` and differentiates that JAX
-    implementation. This is an execution-routing rule, not an alternative
-    analytical dynamics derivative.
+    with the model's optional analytical term action, or autodiff through
+    ``model._assemble_dynamics_terms`` when no action is supplied. Both routes
+    avoid differentiating a forward-only executor.
 
     Args:
         execute_batch: Family implementation accepting ``q`` and ``qd`` with
@@ -489,11 +607,7 @@ def make_dynamics_evaluator(
             JAX-backed primal terms and their directional derivatives.
         """
 
-        return eqx.filter_jvp(
-            lambda model, q, qd: model._assemble_dynamics_terms(q, qd),
-            primals,
-            tangents,
-        )
+        return _dynamics_terms_jvp(primals, tangents)
 
     return evaluate_terms
 
@@ -575,6 +689,159 @@ def make_dynamics_actuation_evaluator(
     return evaluate_terms
 
 
+def _jacobian_primal(model, q, s):
+    """Evaluate the geometric velocity Jacobian for the supplied configuration.
+
+    Args:
+        model: Model implementing the kinematics interface.
+        q: Configuration, shape ``(num_coordinates,)``.
+        s: Scalar backbone coordinate.
+
+    Returns:
+        Geometric velocity Jacobian, shape ``(twist_dim, num_velocities)``.
+    """
+    return (
+        model._floating_jacobian(q, s) if model.floating_base else model._jacobian(q, s)
+    )
+
+
+@eqx.filter_custom_jvp
+def evaluate_jacobian(model, q, s):
+    """Evaluate the geometric velocity Jacobian for the supplied configuration.
+
+    Args:
+        model: Model implementing the kinematics interface.
+        q: Configuration, shape ``(num_coordinates,)``.
+        s: Scalar backbone coordinate.
+
+    Returns:
+        Geometric velocity Jacobian, shape ``(twist_dim, num_velocities)``.
+    """
+    return _jacobian_primal(model, q, s)
+
+
+@evaluate_jacobian.def_jvp
+def _evaluate_jacobian_jvp(primals, tangents):
+    """Select the configured geometric-Jacobian derivative action.
+
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Geometric Jacobian and its directional derivative.
+    """
+    return _jacobian_jvp(primals, tangents, _jacobian_primal)
+
+
+def _jacobian_jvp(primals, tangents, primal):
+    """Select the configured geometric-Jacobian derivative.
+
+    Args:
+        primals: Model, configuration, and scalar backbone coordinate.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+        primal: Protected geometric-Jacobian evaluator used by autodiff.
+
+    Returns:
+        Geometric Jacobian and its directional derivative.
+    """
+    model, q, s = primals
+    hook = getattr(model, "_analytical_jacobian_jvp", None)
+    if custom_jvp_enabled() and not model.floating_base and hook is not None:
+        result = hook(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(primal, primals, tangents)
+
+
+def _energy_primal(model, q, velocity, kind):
+    """Evaluate the requested energy with the model's configuration layout.
+
+    Args:
+        model: Soft-robot model supplying energy equations.
+        q: Configuration, shape ``(num_coordinates,)``.
+        velocity: Velocity for kinetic/total energy, otherwise ``None``.
+        kind: Static energy kind: gravitational, elastic, kinetic, potential, or total.
+
+    Returns:
+        Scalar energy.
+    """
+    return _energy.evaluate(model, q, velocity, kind)
+
+
+@eqx.filter_custom_jvp
+def evaluate_energy(model, q, velocity, kind):
+    """Evaluate the requested energy with the model's configuration layout.
+
+    Args:
+        model: Soft-robot model supplying energy equations.
+        q: Configuration, shape ``(num_coordinates,)``.
+        velocity: Velocity for kinetic/total energy, otherwise ``None``.
+        kind: Static energy kind: gravitational, elastic, kinetic, potential, or total.
+
+    Returns:
+        Scalar energy.
+    """
+    return _energy_primal(model, q, velocity, kind)
+
+
+@evaluate_energy.def_jvp
+def _evaluate_energy_jvp(primals, tangents):
+    """Select the configured energy derivative action.
+
+    Args:
+        primals: Model, configuration, optional velocity, and energy kind.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Scalar energy and its directional derivative.
+    """
+    if custom_jvp_enabled():
+        result = primals[0]._analytical_energy_jvp(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(_energy_primal, primals, tangents)
+
+
+@eqx.filter_custom_jvp
+def evaluate_inverse_dynamics(model, q, qd, qdd):
+    """Evaluate required generalized effort through the shared boundary.
+
+    Args:
+        model: Soft-robot model supplying required-effort equations.
+        q: Configuration, shape ``(num_coordinates,)``.
+        qd: Generalized velocity, shape ``(num_velocities,)``.
+        qdd: Generalized acceleration, shape ``(num_velocities,)``.
+
+    Returns:
+        Required generalized effort, shape ``(num_velocities,)``.
+    """
+    return model._inverse_dynamics(q, qd, qdd)
+
+
+@evaluate_inverse_dynamics.def_jvp
+def _evaluate_inverse_dynamics_jvp(primals, tangents):
+    """Select the configured inverse-dynamics derivative action.
+
+    Args:
+        primals: Model, configuration, velocity, and acceleration.
+        tangents: Corresponding directions; inactive leaves are ``None``.
+
+    Returns:
+        Required effort and its directional derivative.
+    """
+    hook = getattr(primals[0], "_analytical_inverse_dynamics_jvp", None)
+    if custom_jvp_enabled() and hook is not None:
+        result = hook(primals, tangents)
+        if result is not None:
+            return result
+    return eqx.filter_jvp(
+        lambda model, q, qd, qdd: model._inverse_dynamics(q, qd, qdd),
+        primals,
+        tangents,
+    )
+
+
 @eqx.filter_custom_jvp
 def evaluate_forward_dynamics(
     model: ForwardDynamicsModel,
@@ -586,12 +853,10 @@ def evaluate_forward_dynamics(
 ) -> Array:
     """Evaluate compiled forward dynamics with transform-aware backend routing.
 
-    This boundary does not implement a new analytical derivative. Its custom
-    JVP exists solely to prevent a compiled primal calculation from staging a
-    forward-only Warp callback before JAX selects a derivative rule. Primal
-    calls use the model's configured backend; forward- and reverse-mode
-    transformations evaluate the same forward-dynamics equations with JAX term
-    assembly.
+    Primal calls use the configured backend. During differentiation an
+    explicitly enabled model hook supplies an analytical JVP for supported physics;
+    returning None selects autodiff through the current JAX equations.
+    Both derivative routes avoid staging forward-only Warp callbacks.
 
     Args:
         model: System implementing the forward-dynamics execution contract.
@@ -624,7 +889,7 @@ def _evaluate_forward_dynamics_jvp(
     primals: tuple[Any, ...],
     tangents: tuple[Any, ...],
 ) -> tuple[Array, Array]:
-    """Differentiate forward dynamics using the model's JAX term assembly.
+    """Select a model's analytical JVP or differentiate its JAX assembly.
 
     Args:
         primals: Model, time, state, optional actuation arguments, and backend
@@ -653,6 +918,14 @@ def _evaluate_forward_dynamics_jvp(
             _backend_tangent,
             capabilities_tangent,
         ) = tangents
+    analytical_jvp = getattr(model, "_analytical_forward_dynamics_jvp", None)
+    if custom_jvp_enabled() and analytical_jvp is not None:
+        result = analytical_jvp(
+            (model, t, y, actuation_args),
+            (model_tangent, t_tangent, y_tangent, actuation_tangent),
+        )
+        if result is not None:
+            return result
     return eqx.filter_jvp(
         lambda model_, t_, y_, actuation_args_, capabilities_: (
             _assemble_forward_dynamics(
@@ -728,7 +1001,6 @@ def _assemble_forward_dynamics(
     if tau_ext is None:
         tau_ext = jnp.zeros((model.num_velocities,), dtype=y.dtype)
 
-    elastic = model.elastic_force(q)
     fused = None
     if capabilities is not None:
         from soromox.execution.dispatch import (
@@ -752,14 +1024,7 @@ def _assemble_forward_dynamics(
         actuation = model.actuation_force(q, u, qd=qd, backend=actuation_backend)
     else:
         inertia, coriolis_qd, gravity, actuation = fused
-    rhs = (
-        actuation
-        + tau_ext
-        - coriolis_qd
-        - gravity
-        - elastic
-        - model.damping_matrix(q) @ qd
-    )
+    rhs = actuation + tau_ext - coriolis_qd - gravity - model.passive_force(q, qd)
     qdd = model._solve_inertia(inertia, rhs)
     qdot = model.configuration_derivative(q, qd)
     if model.num_auxiliary_states == 0:
@@ -775,6 +1040,10 @@ __all__ = [
     "DynamicsActuationBatchExecutor",
     "KinematicsBatchExecutor",
     "evaluate_forward_dynamics",
+    "evaluate_inverse_dynamics",
+    "evaluate_energy",
+    "evaluate_pose",
+    "evaluate_jacobian",
     "make_actuation_evaluator",
     "make_dynamics_evaluator",
     "make_dynamics_actuation_evaluator",

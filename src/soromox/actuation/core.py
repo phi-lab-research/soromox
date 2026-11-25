@@ -208,6 +208,21 @@ class PassiveElement(eqx.Module):
     def damping_matrix(self, robot: SoftRobot, q: Array) -> Array:
         return jnp.zeros((robot.num_velocities, robot.num_velocities), dtype=q.dtype)
 
+    @final
+    def passive_force(self, robot: SoftRobot, q: Array, qd: Array) -> Array:
+        """Return this element's elastic and damping effort.
+
+        Args:
+            robot: Robot on which the passive element is installed.
+            q: Configuration, shape ``(robot.num_coordinates,)``.
+            qd: Generalized velocity, shape ``(robot.num_velocities,)``.
+
+        Returns:
+            Required passive effort, shape ``(robot.num_velocities,)``. Its
+            negative is the force applied by the element to the robot.
+        """
+        return self.elastic_force(robot, q) + self.damping_matrix(robot, q) @ qd
+
     def elastic_energy(self, robot: SoftRobot, q: Array) -> Array:
         del robot
         return jnp.zeros((), dtype=q.dtype)

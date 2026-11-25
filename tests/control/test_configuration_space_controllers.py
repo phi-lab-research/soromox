@@ -264,3 +264,32 @@ def test_configuration_space_model_based_controllers_compute_expected_terms(
     )
     assert robot.dynamics_terms_calls == expected_dynamics_terms_calls
     assert control_state_dot is None
+
+
+@pytest.mark.parametrize(
+    "controller_cls", [ComputedTorqueTracker, FeedforwardCompensationTracker]
+)
+def test_trackers_honor_required_effort_override(
+    controller_cls, fake_dynamics_robot_factory, make_reference_factory
+):
+    robot = fake_dynamics_robot_factory(jnp.diag(jnp.array([2.0, 4.0])))
+    reference = make_reference_factory([0.5, -0.1], [0.2, 0.3], [0.1, -0.2])
+    required = jnp.array([1.2, -0.8])
+    calls = []
+
+    def inverse_dynamics(q, v, a):
+        calls.append((q, v, a))
+        return required
+
+    robot.inverse_dynamics = inverse_dynamics
+    controller = controller_cls(robot, reference, PIDControl(0.0, 0.0, 0.0))
+    state = SystemState(t=jnp.array(0.0), y=jnp.array([0.1, -0.2, -0.3, 0.4]))
+    actual, _ = controller.model_based_term(state)
+    assert jnp.allclose(actual, jnp.array([0.6, -0.2]))
+    assert len(calls) == 1
+    q, v = jnp.split(state.y, 2)
+    if controller_cls is FeedforwardCompensationTracker:
+        q, v = reference.x_des_fn(state.t), reference.xd_des_fn(state.t)
+    assert jnp.allclose(calls[0][0], q)
+    assert jnp.allclose(calls[0][1], v)
+    assert jnp.allclose(calls[0][2], reference.xdd_des_fn(state.t))

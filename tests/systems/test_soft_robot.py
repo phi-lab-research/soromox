@@ -1,18 +1,34 @@
 """Unit tests for shared :class:`soromox.systems.SoftRobot` contracts."""
 
-import jax
 import equinox as eqx
+import jax
 import pytest
 from jax import numpy as jnp
 from numpy.testing import assert_allclose
-from system_param_builders import pcs_params, planar_pcs_params
+from system_param_builders import (
+    gvs_params_from_segments,
+    pcs_params,
+    planar_pcs_params,
+)
 
-from soromox.systems import PCS, PCSStructure, PlanarPCS, PlanarPCSStructure
+from soromox import custom_jvp_mode
+from soromox.systems import (
+    GVS,
+    PCS,
+    GVSSegment,
+    JointSpec,
+    LinkSpec,
+    PCSStructure,
+    PlanarPCS,
+    PlanarPCSStructure,
+    StrainBasisSpec,
+    _dynamics,
+)
 
 jax.config.update("jax_enable_x64", True)
 
 
-def _planar_robot(*, floating_base: bool) -> PlanarPCS:
+def _planar_robot(*, floating_base: bool, model_type=PlanarPCS) -> PlanarPCS:
     params = planar_pcs_params(
         length=jnp.array([0.1]),
         radius=jnp.array([0.01]),
@@ -22,7 +38,7 @@ def _planar_robot(*, floating_base: bool) -> PlanarPCS:
         damping_matrix=jnp.eye(3),
         gravity=jnp.array([0.0, -9.81]),
     )
-    return PlanarPCS(
+    return model_type(
         params=params,
         structure=PlanarPCSStructure(num_gauss_points=3),
         floating_base=floating_base,
@@ -30,7 +46,7 @@ def _planar_robot(*, floating_base: bool) -> PlanarPCS:
     )
 
 
-def _spatial_robot(*, floating_base: bool) -> PCS:
+def _spatial_robot(*, floating_base: bool, model_type=PCS) -> PCS:
     params = pcs_params(
         length=jnp.array([0.1]),
         radius=jnp.array([0.01]),
@@ -40,7 +56,7 @@ def _spatial_robot(*, floating_base: bool) -> PCS:
         damping_matrix=jnp.eye(6),
         gravity=jnp.array([0.0, 0.0, -9.81]),
     )
-    return PCS(
+    return model_type(
         params=params,
         structure=PCSStructure(num_gauss_points=3),
         floating_base=floating_base,
@@ -173,9 +189,7 @@ def test_fixed_mount_update_and_public_state_projection() -> None:
     assert_allclose(projected_q[4:], q[4:])
     assert_allclose(projected_v, v)
     assert projected_auxiliary.shape == (0,)
-    assert_allclose(
-        floating.base_transform_from_configuration(q)[:3, 3], base_pose[4:]
-    )
+    assert_allclose(floating.base_transform_from_configuration(q)[:3, 3], base_pose[4:])
 
     fixed = _spatial_robot(floating_base=False).with_fixed_base_pose(base_pose)
     assert_allclose(fixed.fixed_base_pose, base_pose)
@@ -184,3 +198,341 @@ def test_fixed_mount_update_and_public_state_projection() -> None:
     )
     with pytest.raises(ValueError, match="has no fixed base pose"):
         floating.with_fixed_base_pose(base_pose)
+
+
+def _gvs_robot(*, floating_base: bool, model_type=GVS) -> GVS:
+    params, structure = gvs_params_from_segments(
+        [
+            GVSSegment(
+                link=LinkSpec.circular(
+                    length=0.1,
+                    radius=0.01,
+                    density=1000.0,
+                    young_modulus=1e5,
+                    shear_modulus=4e4,
+                    reference_strain=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                ),
+                joint=JointSpec(type="fixed"),
+                basis=StrainBasisSpec(
+                    type="monomial", strain_selector=[1] * 6, basis_order=[0] * 6
+                ),
+                num_gauss_points=5,
+            )
+        ],
+        gravity=jnp.array([0.0, 0.0, -9.81]),
+    )
+    return model_type(
+        params=params, structure=structure, floating_base=floating_base, backend="jax"
+    )
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("floating_base", [False, True])
+def test_required_effort_and_shared_derivative_composition(factory, floating_base):
+    robot = factory(floating_base=floating_base)
+    base_pose = None
+    if floating_base:
+        base_pose = (
+            jnp.array([0.1, -0.1, 0.2])
+            if robot.num_base_coordinates == 3
+            else jnp.array([0.1, -0.1, 0.2, 1.0, 0.0, 0.0, 0.0])
+        )
+    q = robot.pack_configuration(
+        jnp.linspace(-0.02, 0.03, robot.num_internal_dofs), base_pose=base_pose
+    )
+    v = jnp.linspace(-0.02, 0.04, robot.num_velocities)
+    a = jnp.linspace(0.01, 0.03, robot.num_velocities)
+    dq, dv, da = jnp.full_like(q, 0.01), jnp.full_like(v, 0.02), jnp.full_like(a, 0.03)
+    effort = robot.inverse_dynamics(q, v, a)
+    assert_allclose(
+        robot.passive_force(q, v), robot.elastic_force(q) + robot.damping_matrix(q) @ v
+    )
+    y = robot.pack_state(q, v)
+    result = robot.forward_dynamics(0.0, y, (jnp.zeros(robot.num_actuators), effort))
+    assert_allclose(robot.split_state(result)[1], a, rtol=1e-6, atol=1e-8)
+    expected = jax.jit(
+        lambda q, v, a: jax.jvp(robot._inverse_dynamics, (q, v, a), (dq, dv, da))
+    )(q, v, a)
+    actual = jax.jit(
+        lambda q, v, a: jax.jvp(robot.inverse_dynamics, (q, v, a), (dq, dv, da))
+    )(q, v, a)
+    shared = eqx.filter_jit(_dynamics.inverse_dynamics_jvp)(
+        (robot, q, v, a), (jax.tree.map(lambda _: None, robot), dq, dv, da)
+    )
+    for candidate in (actual, shared):
+        for value, reference in zip(candidate, expected, strict=True):
+            assert_allclose(value, reference, rtol=1e-6, atol=1e-8)
+    cotangent = jnp.linspace(0.1, 0.2, robot.num_velocities)
+    actual_vjp = jax.jit(
+        lambda q, v, a: jax.vjp(robot.inverse_dynamics, q, v, a)[1](cotangent)
+    )(q, v, a)
+    expected_vjp = jax.jit(
+        lambda q, v, a: jax.vjp(robot._inverse_dynamics, q, v, a)[1](cotangent)
+    )(q, v, a)
+    for actual, expected in zip(actual_vjp, expected_vjp, strict=True):
+        assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+    args = (jnp.zeros(robot.num_actuators), effort)
+    dy = robot.pack_state(dq, dv)
+    expected = eqx.filter_jit(
+        lambda y: jax.jvp(lambda y: robot._forward_dynamics(0.0, y, args), (y,), (dy,))
+    )(y)
+    actual = eqx.filter_jit(_dynamics.forward_dynamics_jvp)(
+        (robot, 0.0, y, args), (jax.tree.map(lambda _: None, robot), None, dy, None)
+    )
+    for value, reference in zip(actual, expected, strict=True):
+        assert_allclose(value, reference, rtol=1e-6, atol=1e-8)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+def test_disabled_pose_derivatives_skip_analytical_hooks(factory, monkeypatch):
+    robot = factory(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    s = jnp.array(0.05)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled analytical pose rule was called")
+
+    monkeypatch.setattr(type(robot), "_analytical_forward_kinematics_jvp", forbidden)
+    with custom_jvp_mode(False):
+        actual = jax.jit(
+            jax.jacfwd(lambda s: robot.forward_kinematics(q, s, backend="jax"))
+        )(s)
+        expected = jax.jit(
+            jax.jacfwd(lambda s: robot._absolute_forward_kinematics(q, s))
+        )(s)
+    assert_allclose(actual, expected, rtol=1e-7, atol=1e-9)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("floating_base", [False, True])
+def test_shared_energy_derivatives_compose(factory, floating_base, monkeypatch):
+    from soromox.systems import _energy
+
+    robot = factory(floating_base=floating_base)
+    base_pose = None
+    if floating_base:
+        base_pose = (
+            jnp.array([0.1, -0.1, 0.2])
+            if robot.num_base_coordinates == 3
+            else jnp.array([0.1, -0.1, 0.2, 0.0, 0.0, 0.0, 1.0])
+        )
+    q = robot.pack_configuration(
+        jnp.linspace(-0.02, 0.03, robot.num_internal_dofs), base_pose=base_pose
+    )
+    v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+    assert_allclose(
+        robot.kinetic_energy(q, v),
+        0.5 * v @ robot.inertia_matrix(q) @ v,
+        rtol=1e-6,
+        atol=1e-8,
+    )
+    dq, dv = jnp.full_like(q, 0.01), jnp.full_like(v, 0.02)
+    original = type(robot)._analytical_energy_jvp
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("disabled analytical energy rule was called")
+
+    for enabled in (False, True):
+        monkeypatch.setattr(
+            type(robot), "_analytical_energy_jvp", original if enabled else forbidden
+        )
+        for kind in ("kinetic", "gravitational", "elastic", "potential", "total"):
+
+            def fn(q, v, kind=kind):
+                method = getattr(robot, f"{kind}_energy")
+                return method(q, v) if kind in ("kinetic", "total") else method(q)
+
+            def raw(q, v, kind=kind):
+                return _energy.evaluate(robot, q, v, kind)
+
+            def derivatives(function):
+                return jax.jit(
+                    lambda q, v: (
+                        jax.jvp(function, (q, v), (dq, dv)),
+                        jax.grad(function, argnums=(0, 1))(q, v),
+                    )
+                )(q, v)
+
+            with custom_jvp_mode(enabled):
+                actual = derivatives(fn)
+                expected = derivatives(raw)
+            for a, b in zip(
+                jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True
+            ):
+                assert_allclose(a, b, rtol=1e-6, atol=1e-8)
+        jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+def test_energy_derivatives_avoid_execution_dispatch(factory, monkeypatch):
+    """Energy values and derivatives use protected JAX equations on every backend."""
+    robot = factory(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+    dq, dv = jnp.ones_like(q), jnp.ones_like(v)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("energy derivative entered dynamics execution dispatch")
+
+    monkeypatch.setattr(type(robot), "dynamics_terms", forbidden)
+    for enabled in (False, True):
+        with custom_jvp_mode(enabled):
+            fn = jax.jit(
+                lambda q, v: (
+                    jax.jvp(robot.total_energy, (q, v), (dq, dv)),
+                    jax.grad(robot.total_energy, argnums=(0, 1))(q, v),
+                    jax.grad(lambda v: robot.kinetic_energy(q, v))(v),
+                )
+            )
+            result = fn(q, v)
+        assert all(jnp.all(jnp.isfinite(x)) for x in jax.tree.leaves(result))
+        jax.clear_caches()
+
+
+def test_pcs_composite_energies_use_ad_gravity(monkeypatch):
+    robot = _spatial_robot(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    v = jnp.linspace(-0.03, 0.04, robot.num_velocities)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("PCS energy requested analytical gravity")
+
+    monkeypatch.setattr(type(robot), "_gravitational_force", forbidden)
+    for kind in ("gravitational", "potential", "total"):
+
+        def fn(q, public, kind=kind):
+            method = getattr(robot, f"{kind}_energy" if public else f"_{kind}_energy")
+            return method(q, v) if kind == "total" else method(q)
+
+        with custom_jvp_mode(True):
+            actual = jax.jit(jax.grad(lambda q: fn(q, True)))(q)
+            expected = jax.jit(jax.grad(lambda q: fn(q, False)))(q)
+        assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+    jax.clear_caches()
+
+
+def test_gvs_pose_arc_length_uses_autodiff(monkeypatch):
+    robot = _gvs_robot(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    s = jnp.array(0.05)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("GVS pose requested analytical arc-length recurrence")
+
+    monkeypatch.setattr(
+        type(robot), "_forward_kinematics_and_arc_length_derivative", forbidden
+    )
+    with custom_jvp_mode(True):
+        actual = jax.jit(
+            jax.jacfwd(lambda s: robot.forward_kinematics(q, s, backend="jax"))
+        )(s)
+        expected = jax.jit(
+            jax.jacfwd(lambda s: robot._absolute_forward_kinematics(q, s))
+        )(s)
+    assert_allclose(actual, expected, rtol=1e-6, atol=1e-8)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_scalar_jacobian_aliases_share_derivative_routing(
+    factory, enabled, monkeypatch
+):
+    robot = factory(floating_base=False)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    s = jnp.array(0.05)
+    original = type(robot)._analytical_jacobian_jvp
+    calls = []
+
+    def observed(self, *args, **kwargs):
+        assert enabled, "disabled analytical Jacobian rule was called"
+        calls.append(True)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(robot), "_analytical_jacobian_jvp", observed)
+    reference = None
+    for method in (robot.jacobian, robot.jacobian_inertialframe):
+        calls.clear()
+        with custom_jvp_mode(enabled):
+            result = jax.jit(
+                lambda q, method=method: (
+                    jax.jvp(lambda q: method(q, s), (q,), (jnp.ones_like(q),)),
+                    jax.grad(lambda q: jnp.sum(method(q, s)))(q),
+                )
+            )(q)
+        assert bool(calls) == enabled
+        if reference is None:
+            reference = result
+        else:
+            for a, b in zip(
+                jax.tree.leaves(result), jax.tree.leaves(reference), strict=True
+            ):
+                assert_allclose(a, b, rtol=1e-6, atol=1e-8)
+        jax.clear_caches()
+
+
+@pytest.mark.parametrize("factory", [_planar_robot, _spatial_robot, _gvs_robot])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_passive_force_override_is_shared_by_forward_and_inverse(factory, enabled):
+    base = factory(floating_base=False)
+    family = type(base)
+
+    def passive_force(self, q, v):
+        return family.passive_force(self, q, v) + 0.2 * jnp.sin(q) + 0.3 * v**3
+
+    model_type = type("CustomPassiveRobot", (family,), {"passive_force": passive_force})
+    robot = factory(floating_base=False, model_type=model_type)
+    q = jnp.linspace(-0.02, 0.03, robot.num_coordinates)
+    v = jnp.linspace(0.01, 0.04, robot.num_velocities)
+    a = jnp.full_like(v, 0.1)
+    y = robot.pack_state(q, v)
+
+    def roundtrip(state):
+        q, v, _ = robot.split_state(state)
+        required = robot.inverse_dynamics(q, v, a)
+        result = robot.forward_dynamics(0.0, state, (None, required))
+        return robot.split_state(result)[1]
+
+    jax.clear_caches()
+    with custom_jvp_mode(enabled):
+        actual = jax.jit(roundtrip)(y)
+        primal, direction = jax.jit(
+            lambda y: jax.jvp(roundtrip, (y,), (jnp.ones_like(y),))
+        )(y)
+    assert_allclose(actual, a, rtol=1e-6, atol=1e-8)
+    assert_allclose(primal, a, rtol=1e-6, atol=1e-8)
+    assert_allclose(direction, jnp.zeros_like(a), atol=1e-7)
+    jax.clear_caches()
+
+
+@pytest.mark.parametrize("active", ["configuration", "velocity", "parameters"])
+def test_shared_terms_composition_accepts_non_pcs_actions(active):
+    robot = _planar_robot(floating_base=False)
+    q = jnp.array([0.02, 0.01, -0.03])
+    v = jnp.array([0.1, -0.2, 0.3])
+    dmodel = jax.tree.map(
+        lambda value: (
+            jnp.zeros_like(value)
+            if active == "parameters" and eqx.is_inexact_array(value)
+            else None
+        ),
+        robot,
+    )
+    dq = None if active == "velocity" else jnp.ones_like(q)
+    dv = jnp.ones_like(v)
+    calls = []
+
+    def state_action(q, v, dq, dv):
+        calls.append(True)
+        values, directions = jax.jvp(robot._assemble_dynamics_terms, (q, v), (dq, dv))
+        return (*values, *directions)
+
+    primals, tangents = (robot, q, v), (dmodel, dq, dv)
+    actual = _dynamics.terms_jvp(primals, tangents, state_action=state_action)
+    expected = _dynamics.ad_terms_jvp(primals, tangents)
+    for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert_allclose(a, b, rtol=1e-8, atol=1e-10)
+    assert bool(calls) is (active == "configuration")
+    jax.clear_caches()

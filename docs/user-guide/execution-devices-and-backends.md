@@ -285,21 +285,14 @@ including nested scalar `vmap` expressions for Cartesian batches.
 
 ## Differentiation
 
-JAX transformations always differentiate the JAX implementation, even when
-the model uses Warp for ordinary primal GPU calls. This applies to accelerated
-kinematics and Jacobians as well as `model.dynamics_terms` and complete
-`forward_dynamics` evaluations.
+JAX transformations use ordinary autodiff through the JAX implementation by
+default, even when the model uses Warp for ordinary primal GPU calls. Explicitly
+enabling custom derivatives selects supported analytical rules at the same JAX
+boundary. This applies to kinematics and geometric Jacobians, dynamics terms
+and forward/inverse dynamics, and scalar energy queries.
 
-```python
-import jax
-import jax.numpy as jnp
-
-def objective(q_value):
-    B, Cqd, G = robot.dynamics_terms(q_value, qd)
-    return jnp.sum(B) + jnp.sum(Cqd**2) + jnp.sum(G**2)
-
-gradient = jax.grad(objective)(q)
-```
+See [Differentiation](differentiation.md) for mode selection, derivative
+representations, examples, and analytical support by model.
 
 The same routing applies to `jax.jvp`, `jax.jacfwd`, `jax.jacrev`, and reverse
 mode through a rollout. The returned derivatives therefore retain the existing

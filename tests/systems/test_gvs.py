@@ -1697,6 +1697,7 @@ def test_gvs_arc_length_derivatives_match_autodiff() -> None:
         )
 
 
+@pytest.mark.usefixtures("analytical_derivatives")
 def test_gvs_custom_jvps_include_arc_length_derivative() -> None:
     robot = build_varied_basis_gvs(num_segments=3)
     q = random_q(robot, jax.random.PRNGKey(2030), scale=0.03)
